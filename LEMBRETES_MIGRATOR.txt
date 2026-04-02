@@ -1,8 +1,23 @@
+nohup ./chama_migrator.sh CONTROLEVERSAO &
+nohup ./chama_migrator.sh LOG_EVENTOS &
+nohup ./chama_migrator.sh HISTORICO_OPERACAO &
+nohup ./chama_migrator.sh OCORRENCIA &
+nohup ./chama_migrator.sh PARCELASCTB &
+nohup ./chama_migrator.sh OPERACAO_CREDITO &
+nohup ./chama_migrator.sh NMOV &
+nohup ./chama_migrator.sh OCORRENCIA_SISAT &
+nohup ./chama_migrator.sh PESSOA_PRETENDENTE &
+nohup ./chama_migrator.sh DOCUMENTO_OPERACAO &
+
+
+
+
 
 cd /migracao_firebird/
 source .venv/bin/activate
 export PYTHONIOENCODING=utf-8
 python migrator.py --table CONTROLEVERSAO
+python  PosMigracao_comparaChecksum_bytea.py --table CONTROLEVERSAO
 
 cd /migracao_firebird/
 source .venv/bin/activate
@@ -49,6 +64,14 @@ source .venv/bin/activate
 export PYTHONIOENCODING=utf-8
 python migrator.py --table PESSOA_PRETENDENTE 
 
+
+
+-- conferencia
+
+cd /migracao_firebird/
+source .venv/bin/activate
+export PYTHONIOENCODING=utf-8
+python  PosMigracao_comparaChecksum_bytea.py --table CONTROLEVERSAO
 
 
 [17:59, 3/31/2026] Carlos Clicio Gatti: o sistema da progum grava em ISO-8859-1, lembra da reuniao com o ipiranga

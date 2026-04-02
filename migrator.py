@@ -74,6 +74,8 @@ if os.name == 'nt':
 
 from pg_constraints import ConstraintManager
 
+BASE_DIR = Path(__file__).parent
+
 
 # ═══════════════════════════════════════════════════════════════
 #  ESTRUTURAS DE DADOS
@@ -408,7 +410,7 @@ class FirebirdToPgMigrator:
             self.config['migration']['_override_table'] = {
                 'source':   table.upper(),
                 'dest':     table.lower(),
-                'state_db': f'migration_state_{table.lower()}.db',
+                'state_db': str(BASE_DIR / f'migration_state_{table.lower()}.db'),
             }
 
         # --log-file: sobrescreve path do log (para execução paralela)
@@ -474,7 +476,7 @@ class FirebirdToPgMigrator:
             result = []
             for t in cfg_m['tables']:
                 dest = t['dest']
-                state_db = t.get('state_db', f'migration_state_{dest}.db')
+                state_db = t.get('state_db') or str(BASE_DIR / f'migration_state_{dest}.db')
                 result.append({
                     'source':   t['source'],
                     'dest':     dest,
@@ -486,7 +488,7 @@ class FirebirdToPgMigrator:
         return [{
             'source':   cfg_m['source_table'],
             'dest':     cfg_m['dest_table'],
-            'state_db': cfg_m.get('state_db', 'migration_state.db'),
+            'state_db': cfg_m.get('state_db') or str(BASE_DIR / 'migration_state.db'),
         }]
 
     def _build_table_map(self, tables: List[dict]) -> dict:
@@ -1007,11 +1009,7 @@ class FirebirdToPgMigrator:
             self.log.info('  ╚' + '═' * 56 + '╝')
             self.log.info('')
 
-            resp = input(f'  Continuar [{source}] do checkpoint? (s/n): ').strip().lower()
-            if resp != 's':
-                is_restart = False
-                self._state.reset()
-                self.log.info('  Checkpoint ignorado — recomeçando do zero.')
+            self.log.info('  Retomando automaticamente do checkpoint.')
 
         if not is_restart:
             self._state.reset()
@@ -1032,11 +1030,6 @@ class FirebirdToPgMigrator:
 
         # ── Truncar (somente em run fresh) ───────────────────
         if not is_restart:
-            resp = input(
-                f'  Truncar "{schema}.{dest}"? (s/n): ').strip().lower()
-            if resp != 's':
-                self.log.info('  Cancelado.')
-                return
             self._truncate_dest()
 
         # ── Progresso inicial ─────────────────────────────────
