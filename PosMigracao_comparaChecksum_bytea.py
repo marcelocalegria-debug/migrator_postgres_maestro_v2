@@ -485,7 +485,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="Verifica checksums BLOB vs BYTEA após migração")
     p.add_argument("--config", default="config.yaml", help="Arquivo de configuração")
     p.add_argument("--table",  default=None,
-                   help="Processar apenas esta tabela (nome PostgreSQL, ex: operacao_credito)")
+                   help="Processar apenas esta tabela (nome Firebird ou PostgreSQL, ex: OPERACAO_CREDITO ou operacao_credito)")
     p.add_argument("--schema", default="public", help="Schema PostgreSQL (padrão: public)")
     return p.parse_args()
 
@@ -502,9 +502,15 @@ def main():
     # Filtra tabelas se --table especificado
     tabelas = TABELAS
     if args.table:
-        tabelas = [(fb, pg) for fb, pg in TABELAS if pg == args.table]
+        needle = args.table.strip()
+        tabelas = [
+            (fb, pg) for fb, pg in TABELAS
+            if pg.lower() == needle.lower() or fb.upper() == needle.upper()
+        ]
         if not tabelas:
-            console.print(f"[red]Tabela não encontrada na lista: {args.table}[/red]")
+            nomes = ", ".join(f"{fb}/{pg}" for fb, pg in TABELAS)
+            console.print(f"[red]Tabela não encontrada na lista: {needle}[/red]")
+            console.print(f"[dim]Tabelas disponíveis (Firebird/PostgreSQL): {nomes}[/dim]")
             sys.exit(1)
 
     try:

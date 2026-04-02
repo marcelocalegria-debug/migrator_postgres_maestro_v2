@@ -1,26 +1,53 @@
-PS C:\Python\Migracao_Fire2pg_c6_prod> .\.venv\Scripts\activate
-(Migracao_Fire2pg) PS C:\Python\Migracao_Fire2pg_c6_prod> git push origin main
-error: src refspec main does not match any
-error: failed to push some refs to 'https://github.com/marcelocalegria-debug/Migracao_Fire2pg_c6_prod.git'
-(Migracao_Fire2pg) PS C:\Python\Migracao_Fire2pg_c6_prod> git remote add origin https://github.com/marcelocalegria-debug/migrator_firebird_postgres
-error: remote origin already exists.
-(Migracao_Fire2pg) PS C:\Python\Migracao_Fire2pg_c6_prod> git remote set-url origin https://github.com/marcelocalegria-debug/migrator_firebird_postgres
-(Migracao_Fire2pg) PS C:\Python\Migracao_Fire2pg_c6_prod>  git remote -v
-origin  https://github.com/marcelocalegria-debug/migrator_firebird_postgres (fetch)
-origin  https://github.com/marcelocalegria-debug/migrator_firebird_postgres (push)
-(Migracao_Fire2pg) PS C:\Python\Migracao_Fire2pg_c6_prod>  git branch -M main
-(Migracao_Fire2pg) PS C:\Python\Migracao_Fire2pg_c6_prod> git push -u origin main
-Enumerating objects: 21, done.
-Counting objects: 100% (21/21), done.
-Delta compression using up to 16 threads
-Compressing objects: 100% (18/18), done.
-Writing objects: 100% (21/21), 686.29 KiB | 9.03 MiB/s, done.
-Total 21 (delta 0), reused 0 (delta 0), pack-reused 0 (from 0)
-To https://github.com/marcelocalegria-debug/migrator_firebird_postgres
- * [new branch]      main -> main
-branch 'main' set up to track 'origin/main'.
-(Migracao_Fire2pg) PS C:\Python\Migracao_Fire2pg_c6_prod> 
 
+cd /migracao_firebird/
+source .venv/bin/activate
+export PYTHONIOENCODING=utf-8
+python migrator.py --table CONTROLEVERSAO
+
+cd /migracao_firebird/
+source .venv/bin/activate
+export PYTHONIOENCODING=utf-8
+python migrator.py --table LOG_EVENTOS 
+
+cd /migracao_firebird/
+source .venv/bin/activate
+export PYTHONIOENCODING=utf-8
+python migrator.py --table HISTORICO_OPERACAO 
+
+cd /migracao_firebird/
+source .venv/bin/activate
+export PYTHONIOENCODING=utf-8
+python migrator.py --table OCORRENCIA 
+
+cd /migracao_firebird/
+source .venv/bin/activate
+export PYTHONIOENCODING=utf-8
+python migrator.py --table PARCELASCTB
+
+cd /migracao_firebird/
+source .venv/bin/activate
+export PYTHONIOENCODING=utf-8
+python migrator.py --table OPERACAO_CREDITO 
+
+cd /migracao_firebird/
+source .venv/bin/activate
+export PYTHONIOENCODING=utf-8
+python migrator.py --table NMOV
+
+cd /migracao_firebird/
+source .venv/bin/activate
+export PYTHONIOENCODING=utf-8
+python migrator.py --table OCORRENCIA_SISAT 
+
+cd /migracao_firebird/
+source .venv/bin/activate
+export PYTHONIOENCODING=utf-8
+python migrator.py --table DOCUMENTO_OPERACAO 
+
+cd /migracao_firebird/
+source .venv/bin/activate
+export PYTHONIOENCODING=utf-8
+python migrator.py --table PESSOA_PRETENDENTE 
 
 
 
