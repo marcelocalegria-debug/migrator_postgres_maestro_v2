@@ -10,7 +10,7 @@
 7-Aumetar CPU e memória do servidor Equinix
 8-Levar antes NMOV (NU_MAC) e LOG_EVENTOS (DT_DATA_HORA) até uma data de corte? (NAO HÁ ESSA FUNCIONALIDADE NO MIGRATOR AINDA)
 
-### MIGRACAO (JANELA)
+### MIGRACAO (JANELA) 
 1-Baixar o banco firebird e copiar o arquivo para /databases no servidor equinix - Tempo?
 2-Rodar o Postgres Converter para as tabelas menores
 3-Rodar o chama_migrator.py para as 9 tabelas maiores (nohup &)
