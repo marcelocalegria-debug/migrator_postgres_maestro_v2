@@ -1,3 +1,36 @@
+CHECKLIST - DRAFT PASSOS MIGRACAO 
+
+PRE-MIGRACAO (ANTES DA JANELA)
+1-Obter o cria.sql do esquema Postgres na mesma versao do SCCI no firebird
+2-Reset da base no posgres (reciar com o oscript de criacao)
+3-Configuração do postgresql.conf e pg_hba.conf já com os parametros producao
+4-Desligar archivelog
+5-Ajustes no cria.sql (editor) para nao reconectar no banco, banco correto e default_tablespace
+6-Rodar a criação da base vazia (schema) no Postgres
+7-Aumetar CPU e memória do servidor Equinix
+
+MIGRACAO (JANELA)
+1-Baixar o banco firebird e copiar o arquivo para /databases no servidor equinix - Tempo?
+2-Rodar o Postgres Converter para as tabelas menores
+3-Rodar o chama_migrator.py para as 9 tabelas maiores (nohup &)
+4-Rodar o migrator_parallel_doc_oper.py para a DOCUEMNTO_OPERACAO em parallel de 4 threads
+5-Acompanhar migracao com o Monitor.py
+6-Rodar o PosMigracao_comparaChecksum_bytea (demorado devido a computacao do MD5)
+7-Em paralelo, habiltiar as contraints PK, FK e indices das 10 tabelas
+8-Verificar logs de toda a operacao
+9-Gerar o backup do postgres na Equinix e tranferir para o EC2 do C6
+10-Importar o backup
+
+POS-MIGRACAO
+1-Backup lógico para garantir a integridade dos dados
+2-Backup fisico
+3-Ativar archivelog
+4-Gerar a replica (melhor deixar já ativdado na carga/restore backup)
+5-Rodar o analyse para regerar as estatisticas
+5-Ativar na crontab vaccum, backups e rebuilds
+
+
+
 nohup ./chama_migrator.sh CONTROLEVERSAO &
 nohup ./chama_migrator.sh LOG_EVENTOS &
 nohup ./chama_migrator.sh HISTORICO_OPERACAO &
@@ -9,74 +42,6 @@ nohup ./chama_migrator.sh OCORRENCIA_SISAT &
 nohup ./chama_migrator.sh PESSOA_PRETENDENTE &
 nohup ./chama_migrator.sh DOCUMENTO_OPERACAO &
 
-
-
-
-
-cd /migracao_firebird/
-source .venv/bin/activate
-export PYTHONIOENCODING=utf-8
-python migrator.py --table CONTROLEVERSAO
-python  PosMigracao_comparaChecksum_bytea.py --table CONTROLEVERSAO
-
-cd /migracao_firebird/
-source .venv/bin/activate
-export PYTHONIOENCODING=utf-8
-python migrator.py --table LOG_EVENTOS 
-
-cd /migracao_firebird/
-source .venv/bin/activate
-export PYTHONIOENCODING=utf-8
-python migrator.py --table HISTORICO_OPERACAO 
-
-cd /migracao_firebird/
-source .venv/bin/activate
-export PYTHONIOENCODING=utf-8
-python migrator.py --table OCORRENCIA 
-
-cd /migracao_firebird/
-source .venv/bin/activate
-export PYTHONIOENCODING=utf-8
-python migrator.py --table PARCELASCTB
-
-cd /migracao_firebird/
-source .venv/bin/activate
-export PYTHONIOENCODING=utf-8
-python migrator.py --table OPERACAO_CREDITO 
-
-cd /migracao_firebird/
-source .venv/bin/activate
-export PYTHONIOENCODING=utf-8
-python migrator.py --table NMOV
-
-cd /migracao_firebird/
-source .venv/bin/activate
-export PYTHONIOENCODING=utf-8
-python migrator.py --table OCORRENCIA_SISAT 
-
-cd /migracao_firebird/
-source .venv/bin/activate
-export PYTHONIOENCODING=utf-8
-python migrator.py --table DOCUMENTO_OPERACAO 
-
-cd /migracao_firebird/
-source .venv/bin/activate
-export PYTHONIOENCODING=utf-8
-python migrator.py --table PESSOA_PRETENDENTE 
-
-
-
--- conferencia
-
-cd /migracao_firebird/
-source .venv/bin/activate
-export PYTHONIOENCODING=utf-8
-python  PosMigracao_comparaChecksum_bytea.py --table CONTROLEVERSAO
-
-
-[17:59, 3/31/2026] Carlos Clicio Gatti: o sistema da progum grava em ISO-8859-1, lembra da reuniao com o ipiranga
-[17:59, 3/31/2026] Carlos Clicio Gatti: ele nao processa
-[18:00, 3/31/2026] Carlos Clicio Gatti: mas é latin1 ou iso-8859-1  ( mesm coisa )
 
 APOS A CARGA
 
@@ -98,24 +63,70 @@ APOS A CARGA
  psql -p 5435 c6_producao  -U postgres -f enable_constraints_pessoa_pretendente.sql
 
 
+-- trobleshooting OOM Killer
+
+Para confirmar se o OOM Killer entrou em ação e "assassinou" o seu processo Python, você deve consultar os logs do kernel do Linux.Use um destes comandos (como root ou com sudo):
+
+1. O comando mais rápido (dmesg)O dmesg mostra as mensagens diretas do kernel. Filtre por "OOM" ou "Killed":
+bash
+
+sudo dmesg -T | grep -i -E 'oom|killed'
+
+   -T converte o timestamp do kernel para data/hora legível.Procure por linhas que dizem: "Out of memory: Killed process [PID] (python)".
+
+2. Consultando o log do sistema (journalctl)No Debian 13, o journalctl é a forma mais detalhada de ver o histórico:
+bash
+
+sudo journalctl -k --since "2 hour ago" | grep -i "out of memory"
+
+Isso mostrará apenas as mensagens de kernel da última hora.
+
+3. O arquivo de log tradicionalSe preferir ler o arquivo bruto (pode ser grande):
+bash
+
+sudo grep -i "killed process" /var/log/syslog
+
+# OU
+
+sudo grep -i "killed process" /var/log/kern.log
+
+O que você verá no log:Se foi o OOM Killer, você verá uma tabela de processos e uma mensagem final parecida com esta:
+
+Out of memory: Killed process 4085278 (python) total-vm:12345kB, anon-rss:6789kB, file-rss:0kB, shmem-rss:0kB
+
+
+CONTROLEVERSAO
+
+10:46:16 [INFO   ] migrator:   [██████████████████░░░░░░░░░░░░]  60.1% |      260,000/     432,602 | Lote    26 |      1,507 lin/s | ETA      1m54s | 2m52s
+10:46:23 [INFO   ] migrator:   [██████████████████░░░░░░░░░░░░]  62.4% |      270,000/     432,602 | Lote    27 |      1,507 lin/s | ETA      1m47s | 2m59s
+10:46:29 [INFO   ] migrator:   [███████████████████░░░░░░░░░░░]  64.7% |      280,000/     432,602 | Lote    28 |      1,510 lin/s | ETA      1m41s | 3m05s
+10:46:35 [INFO   ] migrator:   [████████████████████░░░░░░░░░░]  67.0% |      290,000/     432,602 | Lote    29 |      1,520 lin/s | ETA      1m33s | 3m10s
+10:46:41 [INFO   ] migrator:   [████████████████████░░░░░░░░░░]  69.3% |      300,000/     432,602 | Lote    30 |      1,523 lin/s | ETA      1m27s | 3m16s
+10:46:47 [INFO   ] migrator:   [█████████████████████░░░░░░░░░]  71.7% |      310,000/     432,602 | Lote    31 |      1,528 lin/s | ETA      1m20s | 3m22s
+10:46:52 [INFO   ] migrator:   [██████████████████████░░░░░░░░]  74.0% |      320,000/     432,602 | Lote    32 |      1,535 lin/s | ETA      1m13s | 3m28s
+10:48:35 [INFO   ] migrator:   [██████████████████████░░░░░░░░]  76.3% |      330,000/     432,602 | Lote    33 |      1,061 lin/s | ETA      1m36s | 5m11s
+10:52:39 [INFO   ] migrator:   [███████████████████████░░░░░░░]  78.6% |      340,000/     432,602 | Lote    34 |        612 lin/s | ETA      2m31s | 9m15s
+./chama_migrator.sh, linha 43: 4085278 Morto                   python migrator.py --table "$TABELA"
+
+[PASSO 2] Rodando Comparação de Checksum...
+..
+
+root@postgres-server-sp:/migracao_firebird/logs# sudo journalctl -k --since "2 hour ago" | grep -i "out of memory"
+
+Apr 03 10:54:33 postgres-server-sp kernel: Out of memory: Killed process 4085278 (python) total-vm:7143916kB, anon-rss:3726536kB, file-rss:0kB, shmem-rss:0kB, UID:101 pgtables:12980kB oom_score_adj:0
+root@postgres-server-sp:/migracao_firebird/logs#
+
+oot@postgres-server-sp:/migracao_firebird/logs# sudo dmesg -T | grep -i -E 'oom|killed' | tail -6
+[Thu Apr  2 23:15:06 2026] Out of memory: Killed process 3850626 (python) total-vm:7082244kB, anon-rss:3712448kB, file-rss:60kB, shmem-rss:0kB, UID:101 pgtables:12772kB oom_score_adj:0
+[Fri Apr  3 10:53:22 2026] head invoked oom-killer: gfp_mask=0x140cca(GFP_HIGHUSER_MOVABLE|__GFP_COMP), order=0, oom_score_adj=0
+[Fri Apr  3 10:53:22 2026]  oom_kill_process.cold+0x8/0x8d
+[Fri Apr  3 10:53:22 2026] [  pid  ]   uid  tgid total_vm      rss rss_anon rss_file rss_shmem pgtables_bytes swapents oom_score_adj name
+[Fri Apr  3 10:53:22 2026] oom-kill:constraint=CONSTRAINT_NONE,nodemask=(null),cpuset=/,mems_allowed=0,global_oom,task_memcg=/user.slice/user-1003.slice/session-6708.scope,task=python,pid=4085278,uid=101
+[Fri Apr  3 10:53:22 2026] Out of memory: Killed process 4085278 (python) total-vm:7143916kB, anon-rss:3726536kB, file-rss:0kB, shmem-rss:0kB, UID:101 pgtables:12980kB oom_score_adj:0
+root@postgres-server-sp:/migracao_firebird/logs#
 
 
 
-Multiplicar por 2 para ter o tamenho real o tamanho
-
-CONTROLEVERSAO 
-LOG_EVENTOS 
-HISTORICO_OPERACAO 
-OCORRENCIA 
-PARCELASCTB
-OPERACAO_CREDITO 
-PESSOA_PRETENDENTE 
-NMOV
-OCORRENCIA_SISAT 
-DOCUMENTO_OPERACAO 
-
-
-('CONTROLEVERSAO','LOG_EVENTOS','HISTORICO_OPERACAO','OCORRENCIA', 'PARCELASCTB','OPERACAO_CREDITO', 'PESSOA_PRETENDENTE', 'NMOV','OCORRENCIA_SISAT', 'DOCUMENTO_OPERACAO')
 
 -- conferencia
 SELECT 'CONTROLEVERSAO' AS tabela, COUNT(*) AS total FROM CONTROLEVERSAO
@@ -139,487 +150,3 @@ UNION ALL
 SELECT 'DOCUMENTO_OPERACAO', COUNT(*) FROM DOCUMENTO_OPERACAO;
 
 
-
-
-> /gsd:do
-
-● Skill(/gsd:do)
-  ⎿  Successfully loaded skill · 3 tools allowed
-
-  Read 1 file (ctrl+o to expand)
-
-● User answered Claude's questions:
-  ⎿  · O que você gostaria de fazer? Descreva a tarefa, bug ou ideia e eu direciono para o comando GSD certo. → 
-  
-     Verifique TODO os scripts python e arquivos de configuração da pasta antes de iniciar. Planeje as alterações.
-     STATUS ATUAL - programa de migração funcionando mas com um bug visto até agora: 
-	 BUG - Ele não coleta as DDL´s de primary keys, foreign keys e índices da tabela destino, então ao termino, a tabela está carregada mas sem FK, PK nem indices. 
-	 MELHORIA: Permitir uma lista de tabelas no arquivo de config.yaml.  Pode ser feito sequencialmente por enquanto, o paralelismo será feito em outra etapa ou em instancias separadas de execução
-     Lembre-se que dos 3 objetivos/premissas: 
-	 (1) migrar com 100% de exatidao as colunas BLOB do firebird para o postgres
-     (2) Rapidez, deve ser o mais rapido possivel. 
-	 (3) os bancos firebird (origem) e postgres (destino) estarão em servidores remotos em producão 
-	 (4) Log os erros se possível para que seja possível o debug e correção manual depois
-
-
-
-[18:35, 3/31/2026] Carlos Clicio Gatti: 
-
-DROP TABLE TABLE DOCUMENTO_OPERACAO;
-CREATE TABLE DOCUMENTO_OPERACAO (
-       NU_OPERACAO          INTEGER NOT NULL,
-       NU_DOCUMENTO         INTEGER NOT NULL,
-       ID                   INTEGER,
-       NU_PRETENDENTE       VARCHAR(9),
-       NU_PESSOA            INTEGER,
-       CO_USUARIO_RECEBIMENTO VARCHAR(20),
-       NU_GRUPO_DOCUMENTO   INTEGER,
-       NU_DOCUMENTO_GRUPO_DOC INTEGER,
-       IN_DOCUMENTO_RECEBIDO "BOOLEAN" DEFAULT  'f',
-       IN_DOCUMENTO_VERIFICADO "BOOLEAN" DEFAULT  'f',
-       IN_DOCUMENTO_OK      "BOOLEAN" DEFAULT  'f',
-       DT_RECEBIMENTO       TIMESTAMP,
-       DT_PARECER           TIMESTAMP,
-       CO_USUARIO_PARECER   VARCHAR(20),
-       TE_EXIGENCIA         BLOB,
-       NO_DOCUMENTO         VARCHAR(60),
-       NO_DOCUMENTO_SISTARQ VARCHAR(255),
-       DT_VENCIMENTO_DOCUMENTO TIMESTAMP,
-       NU_FORNECEDOR        INTEGER,
-       IN_LAUDO_AVALIACAO   "BOOLEAN" DEFAULT 'f',
-       DT_EMISSAO_DOCUMENTO TIMESTAMP,
-       CO_STATUS_DOC        SMALLINT,
-       CO_TIPO_ONUS         SMALLINT,
-       VA_VALOR             DOUBLE PRECISION DEFAULT 0,
-       TE_OBS_CONSULTOR     BLOB,
-       TE_OBS_ANALISTA      BLOB,
-       NU_IMV_OPER_EMP      INTEGER DEFAULT 0,
-       CO_ID_OCR            INTEGER DEFAULT 0,
-       ID_EXTERNO           VARCHAR(64),
-       CO_STATUS_EXT        VARCHAR(3),
-       DT_STATUS_EXT        TIMESTAMP,
-       DT_SOLIC_EXT         TIMESTAMP,
-       DT_ENVIO_OCR         TIMESTAMP,
-       DT_RECEBIMENTO_OCR   TIMESTAMP,
-       TE_DADOS_OCR         BLOB,
-       ID_SOLICITACAO_OCR   VARCHAR(255),
-       CO_STATUS_OCR        VARCHAR(1),
-       CO_USUARIO_OCR       VARCHAR(20),
-       IN_EXIBE_PASTA_EMPREEND "BOOLEAN" DEFAULT 'f'
-       );
-
-CREATE INDEX XIF374DOCUMENTO_OPERACAO ON DOCUMENTO_OPERACAO
-(
-       NU_OPERACAO
-);
-
-CREATE INDEX XIF376DOCUMENTO_OPERACAO ON DOCUMENTO_OPERACAO
-(
-       NU_GRUPO_DOCUMENTO,
-       NU_DOCUMENTO_GRUPO_DOC
-);
-[18:35, 3/31/2026] Carlos Clicio Gatti: CREATE INDEX XIF377DOCUMENTO_OPERACAO ON DOCUMENTO_OPERACAO
-(
-       CO_USUARIO_RECEBIMENTO
-);
-
-CREATE INDEX XIF378DOCUMENTO_OPERACAO ON DOCUMENTO_OPERACAO
-(
-       CO_USUARIO_PARECER
-);
-
-CREATE INDEX XIF379DOCUMENTO_OPERACAO ON DOCUMENTO_OPERACAO
-(
-       NU_PRETENDENTE,
-       NU_PESSOA
-);
-
-CREATE INDEX XIF380DOCUMENTO_OPERACAO ON DOCUMENTO_OPERACAO
-(
-       ID
-);
-
-CREATE INDEX XIF381DOCUMENTO_OPERACAO ON DOCUMENTO_OPERACAO
-(
-       NU_GRUPO_DOCUMENTO
-);
-
-CREATE INDEX DOCUMENTO_OPERACAOX01 ON DOCUMENTO_OPERACAO
-(
-       ID_EXTERNO
-);
-
-ALTER TABLE DOCUMENTO_OPERACAO
-       ADD CONSTRAINT XPKDOCUMENTO_OPERACAO PRIMARY KEY (NU_OPERACAO,
-              NU_DOCUMENTO);
-
-ALTER TABLE DOCUMENTO_OPERACAO
-       ADD CONSTRAINT R_GRUPO_DOC__DOC_OPERACAO
-              FOREIGN KEY (NU_GRUPO_DOCUMENTO)
-                             REFERENCES GRUPO_DOCUMENTO;
-
-ALTER TABLE DOCUMENTO_OPERACAO
-       ADD CONSTRAINT R_SISTARQ__DOC_OPERACAO
-              FOREIGN KEY (ID)
-                             REFERENCES SISTARQ;
-
-ALTER TABLE DOCUMENTO_OPERACAO
-       ADD CONSTRAINT R_PESSOA_PRET__DOC_OPERACAO
-              FOREIGN KEY (NU_PESSOA, NU_PRETENDENTE)
-                             REFERENCES PESSOA_PRETENDENTE
-                             ON DELETE CASCADE;
-ALTER TABLE DOCUMENTO_OPERACAO
-       ADD CONSTRAINT R_GRUPO_DOC__DOC_OPERACAO
-              FOREIGN KEY (NU_GRUPO_DOCUMENTO)
-                             REFERENCES GRUPO_DOCUMENTO;
-
-ALTER TABLE DOCUMENTO_OPERACAO
-       ADD CONSTRAINT R_SISTARQ__DOC_OPERACAO
-              FOREIGN KEY (ID)
-                             REFERENCES SISTARQ;
-
-ALTER TABLE DOCUMENTO_OPERACAO
-       ADD CONSTRAINT R_PESSOA_PRET__DOC_OPERACAO
-              FOREIGN KEY (NU_PESSOA, NU_PRETENDENTE)
-                             REFERENCES PESSOA_PRETENDENTE
-                             ON DELETE CASCADE;
-
-ALTER TABLE DOCUMENTO_OPERACAO
-       ADD CONSTRAINT R_USUARIO_PAREC__DOC_OPERACAO
-              FOREIGN KEY (CO_USUARIO_PARECER)
-                             REFERENCES USUARIO;
-
-ALTER TABLE DOCUMENTO_OPERACAO
-       ADD CONSTRAINT R_USUARIO_RECEB__DOC_OPERACAO
-              FOREIGN KEY (CO_USUARIO_RECEBIMENTO)
-                             REFERENCES USUARIO;
-
-ALTER TABLE DOCUMENTO_OPERACAO
-       ADD CONSTRAINT R_OPERACAO__DOC_OPERACAO
-              FOREIGN KEY (NU_OPERACAO)
-                             REFERENCES OPERACAO_CREDITO
-                             ON DELETE CASCADE;
-
-ALTER TABLE DOCUMENTO_OPERACAO
-       ADD CONSTRAINT R_DOC_GRUPO__DOC_OPERACAO
-              FOREIGN KEY (NU_GRUPO_DOCUMENTO, NU_DOCUMENTO_GRUPO_DOC)
-                             REFERENCES DOCUMENTO_GRUPO_DOCUMENTO;
-
-DROP TABLE PESSOA_PRETENDENTE;
-CREATE TABLE PESSOA_PRETENDENTE (
-       NU_PRETENDENTE       VARCHAR(9) DEFAULT '' NOT NULL,
-       NU_PESSOA            INTEGER NOT NULL,
-       NO_PESSOA            VARCHAR(40),
-       NU_IDENTIDADE        VARCHAR(15),
-       CO_UFIDENTIDADE      VARCHAR(2),
-       NU_CPROF             VARCHAR(7),
-       NO_SERCPROF          VARCHAR(5),
-       NU_CPFCNPJ           VARCHAR(14),
-       DT_NASCIMENTO        TIMESTAMP,
-       NO_LOCALNASC         VARCHAR(21),
-       CO_UFNASC            VARCHAR(2),
-       NU_SEXO              SMALLINT,
-       NU_ESCOLARIDADE      SMALLINT,
-       NU_SITESCOLAR        SMALLINT,
-       CO_ESTCIV            SMALLINT,
-       CO_REGIME_CASAMENTO  SMALLINT,
-       CO_UFCPROF           VARCHAR(2),
-       CO_PROFISSAO         SMALLINT,
-       CO_SIT_RENDA         SMALLINT,
-       CO_CATEGORIA         INTEGER,
-       CO_SIT_EST_CIV       SMALLINT,
-       DT_CASAMENTO         TIMESTAMP,
-       CO_NACIONALIDADE     SMALLINT,
-       NU_ORGAOV            VARCHAR(9),
-       IN_EADQUIRENTE       CHAR(1),
-       NO_TP_EXP_AGRO_1     VARCHAR(21),
-       NO_TP_EXP_AGRO_2     VARCHAR(21),
-       NO_TP_EXP_AGRO_3     VARCHAR(21),
-       CO_SITUACAO_AGRO     SMALLINT,
-       DT_IDENTIDADE        TIMESTAMP,
-       NU_PIS               VARCHAR(15),
-       NO_ORGE              VARCHAR(6),
-       NU_AGENCDV           VARCHAR(1),
-       NU_OPER              SMALLINT,
-       NU_CTADV             VARCHAR(2),
-       NO_PAI               VARCHAR(41),
-       NO_MAE               VARCHAR(41),
-       NU_CONJUGE           INTEGER,
-       NU_CELULAR           VARCHAR(11),
-       VA_SALDO_DISP_FGTS   DOUBLE PRECISION,
-       DT_SALDO_FGTS        TIMESTAMP,
-       VA_POUPANCA          DOUBLE PRECISION,
-       VA_SALDO_POUPANCA    DOUBLE PRECISION,
-       VA_OUT_APLICACAO     DOUBLE PRECISION,
-       VA_SALDO_OUT_APLICACAO DOUBLE PRECISION,
-       IN_FISICA_JURIDICA   CHAR(1),
-       VA_CREDIT_SCORE      DOUBLE PRECISION,
-       DT_CONSULTA_SERASA   TIMESTAMP,
-       NU_BANCO             INTEGER,
-       NU_AGENCIA           VARCHAR(20),
-       NU_CONTA_CORRENTE    VARCHAR(20),
-       NO_ENDERECO          VARCHAR(41),
-       NU_NUMERO            INTEGER,
-       NO_COMPLEMENTO       VARCHAR(15),
-NU_DDD_RES           VARCHAR(5),
-       NU_TELEFONE_RES      VARCHAR(11),
-       NO_BAIRRO            VARCHAR(21),
-       CO_UF                VARCHAR(2),
-       NU_CEP               VARCHAR(9),
-       PE_RENDA             INTEGER,
-       VA_RENDA             DOUBLE PRECISION,
-       CO_MUNIC_CATEG       INTEGER,
-       NU_MDIS              SMALLINT,
-       DT_LEI_DIV           TIMESTAMP,
-       CO_DISTRITO          SMALLINT,
-       CO_MUNICIPIO         SMALLINT,
-       NO_PONTOREF          VARCHAR(31),
-       NO_ENDERECO_ABREV    VARCHAR(3),
-       NU_DEPEND_SEM_RENDA  SMALLINT,
-       NU_DEPEND_RENDA_N_PARTE SMALLINT,
-       VA_RENDA_LIQ_DEPEND  DOUBLE PRECISION,
-       NU_TEMPO_RES_MUN     SMALLINT,
-       NU_TEMPO_RES_MUN_ANT SMALLINT,
-       NO_EMAIL             VARCHAR(80),
-       NU_TIT_ELE_NUM       VARCHAR(14),
-       NU_TIT_ELE_ZONA      VARCHAR(3),
-       NU_TIT_ELE_SECAO     VARCHAR(4),
-       CO_TIPO_RG           SMALLINT,
-       NU_DDD_CEL           VARCHAR(5),
-       IN_E_FIADOR          CHAR(1),
-       IN_FGTS              SMALLINT,
-       CO_NAT_JURIDICA      INTEGER,
-       NU_INSCRICAO_ESTADUAL           INTEGER,
-       CO_NATUREZA_EMPRESA             INTEGER,
-       IN_EMPRESA_TRIBUTAVEL           "BOOLEAN" DEFAULT 'f',
-       IN_EMPRESA_COM_FINS_LUCRATIVOS  "BOOLEAN" DEFAULT 'f',
-       NO_TIPO_LOGRADOURO              VARCHAR(15),
-       NO_CIDADE                       VARCHAR(25),
-       NU_RAMAL                        VARCHAR(5),
-       NU_DDD_FAX                      VARCHAR(5),
-       NU_TELEFONE_FAX                 VARCHAR(11),
-       IN_DEFICIENTE                   "BOOLEAN" DEFAULT 'f',
-       NO_DESCR_DEFICIENCIA            BLOB,
-       CO_TIPO_RACA                    SMALLINT,
-       CO_TIPO_NEGRO                   SMALLINT,
-       NO_MOTIVO                       BLOB,
-       IN_RES_OUTRA_OCUPACAO           "BOOLEAN" DEFAULT 'f',
-       CO_TIPO_DEFICIENCIA             SMALLINT,
-       NO_DEFICIENTE         VARCHAR(40),
-       NU_DEPENDENTES        SMALLINT,
-       NU_SETOR              SMALLINT,
-       NO_QUADRA             VARCHAR(6),
-       NO_LOTE               VARCHAR(4),
-       NO_EDIFICACAO         VARCHAR(6),
-       NU_INSCR_ANTERIOR     INTEGER,
-       NO_PROCEDENCIA        BLOB,
-       VA_TOTAL_BENEFICIO    DOUBLE PRECISION,
-       CO_SIT_TRABALHO       SMALLINT,
-       IN_RECEBE_BENEFICIO_GOV  "BOOLEAN" DEFAULT 'f',
-       NU_VINCULO_NOME_CPFCNPJ_1        VARCHAR(14),
-       NU_VINCULO_NOME_CPFCNPJ_2        VARCHAR(14),
-       NU_VINCULO_NOME_CPFCNPJ_3        VARCHAR(14),
-       NO_VINCULO_ORGAO_PUBLICO_1       VARCHAR(50),
-       NO_VINCULO_ORGAO_PUBLICO_2       VARCHAR(50),
-       NO_VINCULO_ORGAO_PUBLICO_3       VARCHAR(50),
-       TE_DECLARACAO_ORIGEM_RECURSO     BLOB,
-       TE_DECLARACAO_NEGOCIO            BLOB,
-       NU_DDD_REC                       VARCHAR(5),
-       NU_TELEFONE_REC                  VARCHAR(11),
-       NU_INFORMACAO_SOCIAL             VARCHAR(20),
-       IN_UNIAO_ESTAVEL                 VARCHAR(1),
-       NO_EMPRESA_ANTERIOR              VARCHAR(80),
-       NU_DDD_EMPRESA_ANT               VARCHAR(3),
-       NU_TEL_EMPRESA_ANT               VARCHAR(10),
-       NU_RAMAL_EMPRESA_ANT             VARCHAR(5),
-       NO_FACEBOOK                      VARCHAR(50),
-       NO_TWITER                        VARCHAR(50),
-       IN_ESTUDANDO                     "BOOLEAN" DEFAULT 'f',
-       NO_SERIE_ESTUDANDO               VARCHAR(20),
-       NU_NIS_GOVFED                    VARCHAR(15) DEFAULT '',
-       CO_STATUS_SIT_RENDA              SMALLINT DEFAULT 0,
-       CO_TP_CONTA            VARCHAR(1),
-       CO_QUALIFICACAO_CONTA  VARCHAR(1),
-       IN_E_PROCURADOR        "BOOLEAN",
-       NU_INSCRICAO_MUNICIPAL        INTEGER,
-       CO_FORMA_CONSTITUICAO_PJ      VARCHAR(3),
-       NO_WEB_SITE_EMPRESA VARCHAR (40),
-       NO_CARGO VARCHAR(40),
-       NU_REGISTRO_JUNTA_COMERCIAL   VARCHAR(30),
-       NO_ORGAO                      VARCHAR(20),
-       DT_REGISTRO_JUNTA_COMERCIAL   TIMESTAMP,
-       DT_ULT_ALT_CONTRATUAL         TIMESTAMP,
-       NO_EMPRESA_SUCESSORA          VARCHAR(40),
-       DT_SUCESSAO                   TIMESTAMP,
-       NO_PESSOA_CONTATO_PJ          VARCHAR(40),
-       NO_CARGO_PESSOA_CONTATO_PJ    VARCHAR(15),
-       NU_DDD_TEL_CONTATO_PJ         VARCHAR(5),
-       NU_TEL_CONTATO_PJ             VARCHAR(11),
-       CO_TIPO_CONTROLE              VARCHAR(1),
-       DT_ATUALIZACAO_CADASTRO       TIMESTAMP,
-       CO_RISCO_CLIENTE              VARCHAR(3) DEFAULT '',
-       IN_RESTRICOES_CADASTRAIS      "BOOLEAN" DEFAULT 'F',
-       NO_RECIPROCIDADE              VARCHAR(100) DEFAULT '',
-       IN_CONTA_SALARIO              "BOOLEAN" DEFAULT 'F',
-       IN_CESTA_SERVICO              "BOOLEAN" DEFAULT 'F',
-       NO_COMPROVACAO_RENDA          VARCHAR(30) DEFAULT '',
-       NU_LIVRO_PROCURACAO           VARCHAR(15) DEFAULT '',
-       NU_FOLHA_PROCURACAO           VARCHAR(15) DEFAULT '',
-       NO_CARTORIO_PROCURACAO        VARCHAR(50) DEFAULT '',
-       DT_PROCURACAO                 TIMESTAMP,
-       IN_TEM_RESPONSABILIDADE       "BOOLEAN" DEFAULT 'F',
-       VA_BENEFICIO_CONTINUADO       DOUBLE PRECISION,
-       VA_FATURAMENTO_ANUAL          DOUBLE PRECISION DEFAULT 0,
-       DT_FATURAMENTO_MENSAL         TIMESTAMP,
-	   DT_PATRIMONIO_LIQUIDO         TIMESTAMP,
-       VA_PATRIMONIO_LIQUIDO         DOUBLE PRECISION,
-       VA_CAPITAL_REALIZAVEL         DOUBLE PRECISION,
-       QT_EMPREGADOS                 INTEGER,
-       VA_FATURAMENTO_PRESUMIDO      DOUBLE PRECISION,
-       IN_NATUREZA_CAPITAL           VARCHAR(1),
-       IN_REPRESENTANTE_LEGAL        "BOOLEAN",
-       NO_COMARCA_PROCURACAO         VARCHAR(30),
-       CO_UF_PROCURACAO              VARCHAR(2),
-       CO_MUNICIPIO_NATURALIDADE     INTEGER,
-       CO_PESSOA_SISTEMA_EXTERNO     VARCHAR(17),
-       IN_ISENTO_IR                  "BOOLEAN",
-       TE_OBSERVACAO_PROF            BLOB,
-       VA_MEDIA_IR                   DOUBLE PRECISION,
-       NO_CC_OU_POUP                 VARCHAR(1) DEFAULT '',
-       IN_MENOR_EMANCIPADO           "BOOLEAN" DEFAULT 'F',
-       IN_RESTRICAO_SECURITARIA      "BOOLEAN" DEFAULT 'F',
-       TE_RESTRICAO_SECURITARIA      BLOB,
-       IN_FAMILIAR_PESSOA_EXPOSTA    "BOOLEAN" DEFAULT 'F',
-       IN_RELACIONA_PESSOA_EXPOSTA   "BOOLEAN" DEFAULT 'F',
-       VA_ENDIVIDAMENTO_BCO          DOUBLE PRECISION,
-       VA_DIPJ                       DOUBLE PRECISION,
-       VA_ENDIVIDAMENTO_TOT          DOUBLE PRECISION,
-       VA_CURTO_PRZ                  DOUBLE PRECISION,
-       VA_LONGO_PRZ                  DOUBLE PRECISION,
-       VA_VENCIDO                    DOUBLE PRECISION,
-       VA_PREJUIZO                   DOUBLE PRECISION,
-       VA_FINANC_IMOB                DOUBLE PRECISION,
-       IN_SITUACAO_ATIPICA           CHAR(1) DEFAULT 'F',
-       VA_RESTRICAO_CADASTRAL        DOUBLE PRECISION DEFAULT 0,
-       TP_RESTRICAO_CADASTRAL        SMALLINT DEFAULT 0,
-       NO_CERTIFICACAO_1             VARCHAR(40) DEFAULT '',
-       NO_CERTIFICACAO_2             VARCHAR(40) DEFAULT '',
-       NU_ANOS_EXPERIENCIA_PROF      INTEGER,
-       NO_ATIVIDADE_PRINCIPAL_PJ     VARCHAR(40) DEFAULT '',
-       NO_ATIVIDADE_SEGUNDARIA_PJ    VARCHAR(40) DEFAULT '',
-       NO_FUNCAO_EMPRESA             VARCHAR(40) DEFAULT '',
-       CO_ORGANIZACAO_MILITAR        VARCHAR(20) DEFAULT '',
-       CO_SELO_DIGITAL               VARCHAR(23) DEFAULT '',
-       IN_MILITAR_TEMPORARIO         "BOOLEAN" DEFAULT 'F',
-       DT_ENGAJAMENTO                TIMESTAMP,
-       NU_IMOVEL_GARANTIA            INTEGER,
-       NU_BANCO_FASE_RETORNO         INTEGER,
-       NU_AGENCIA_FASE_RETORNO       VARCHAR(20),
-       NU_CONTACORR_FASE_RETORNO     VARCHAR(20),
-       IN_TIPO_PGTO_LIBERACAO        SMALLINT DEFAULT 0,
-       NU_PESSOA_CREDITO_VENDEDOR    INTEGER DEFAULT 0,
-       DT_CONSULTA_CRIVO             DATA1,
-       CO_BANDEIRA_CRIVO             VARCHAR (1),
-       TE_RESPOSTA_CRIVO             BLOB,
-       TE_ENVIO_CONSULTA_CRIVO       BLOB,
-       NO_EMAIL2                     VARCHAR(80),
-       NU_DV_AGENCIA_FASE_RETORNO    VARCHAR(1) DEFAULT '',
-       NU_DV_CONTACORR_FASE_RETORNO  VARCHAR(2) DEFAULT '',
-       CO_PARENTESCO_TITULAR         SMALLINT DEFAULT 0,	   
-	   VA_RENDA_BRUTA                DOUBLE PRECISION DEFAULT 0,
-       PE_PARA_CREDITO               DOUBLE PRECISION DEFAULT 0,
-       TE_CONTRATO_SOCIAL            BLOB,
-       NO_COMPLEMENTO_RG             VARCHAR(40) DEFAULT '',
-       IN_CONJUGE_ANUENTE            CHAR(1),
-       CO_DOCUMENTO_FORMA_PGTO       VARCHAR(50) DEFAULT '',
-       PE_PROPRIEDADE_IMOVEL         DOUBLE PRECISION DEFAULT 0,
-       IN_VENDEDOR_PRINCIPAL         "BOOLEAN" DEFAULT 'F',
-       NO_INSTRUMENTO_PROCURACAO     VARCHAR(30) DEFAULT '',
-       NU_PROCURACAO                 VARCHAR(30),
-       IN_AUTORZC                    "BOOLEAN" DEFAULT 'F',
-       IN_FINANC_ATIVO_SFH           "BOOLEAN" DEFAULT 'F',
-       IN_IMOVEL_MUNIC_RESIDENCIA    "BOOLEAN" DEFAULT 'F',
-       IN_IMOVEL_MUNIC_FINANC        "BOOLEAN" DEFAULT 'F',
-       NU_MATRICULA_REG_CIVIL        VARCHAR(40) DEFAULT '',
-       PE_RENDA_EXCECAO              INTEGER DEFAULT 0,
-       PE_MIP_EXCECAO                DOUBLE PRECISION DEFAULT 0,
-       IN_CONFDADOS                  "BOOLEAN" DEFAULT 'F',
-       IN_CIENCIADADOS               "BOOLEAN" DEFAULT 'F',
-       NU_DDD_CEL_COM                VARCHAR(5),
-       NU_CELULAR_COM                VARCHAR(11),
-       NO_SITUACAO_CADASTRO          VARCHAR(20),
-       NO_PESSOA_COMPLETO            VARCHAR(60),
-       CO_RANKING_CLIENTE            VARCHAR(5),
-       NO_PONTO_CORTE_CLIENTE        VARCHAR(6),
-       IN_PODER_REPRESENTACAO        CHAR(1) DEFAULT '',
-       IN_ANUENTE                    VARCHAR(1),
-       TE_INF_ADICIONAL              BLOB,
-       CO_PIX                        VARCHAR(100) DEFAULT '',
-       IN_PARTE_RELACIONADA          "BOOLEAN" DEFAULT 'F',
-       IN_FAMILIAR_PARTE_RELACIONADA "BOOLEAN" DEFAULT 'F',
-       CO_TIPO_TOMADOR               INTEGER DEFAULT 0,
-       NO_SITUACAO_CONTA             VARCHAR(20),
-       DT_AUTORZC                    TIMESTAMP,
-       CO_USUARIO_AUTORZC            VARCHAR(20) DEFAULT '',
-       IN_PESSOA_DEBITO_CONTA        "BOOLEAN" DEFAULT 'F',
-       IN_POUPANCA_SALARIO           "BOOLEAN" DEFAULT 'f',
-       IN_RESIDE_MENOS1ANO           "BOOLEAN" DEFAULT 'F',
-       IN_TEM_IMOVEL                 "BOOLEAN" DEFAULT 'F',
-       IN_AUTORIZA_TROCA_MSG         "BOOLEAN" DEFAULT 'F',
-       NU_RAMAL_COM                  VARCHAR(5) DEFAULT '',
-       NU_NIRE                       VARCHAR(30) DEFAULT '',
-       CO_UF_REG_CIVIL               VARCHAR(2) DEFAULT '',
-       CO_MUNIC_REG_CIVIL            VARCHAR(25) DEFAULT '',
-       NO_NOME_REG_CIVIL             VARCHAR(50) DEFAULT '',
-       IN_CERTIFICADO_DIGITAL        "BOOLEAN" DEFAULT 'f',
-       DT_VALIDADE_CERTIFICADO       TIMESTAMP,
-       NO_LIVRO_REGCIVIL             VARCHAR(30),
-       NO_FOLHA_REGCIVIL             VARCHAR(30),
-       DT_REGCIVIL                   TIMESTAMP,
-       NO_NOMESOCIAL                 VARCHAR(40) DEFAULT '',
-       CO_CNAE                       VARCHAR(7) DEFAULT '',
-       NO_CARTORIO_PACTO             VARCHAR(150),
-       TE_INFORMACAO_PACTO           VARCHAR(255),
-       IN_RELACIONAMENTO_COMERCIAL   "BOOLEAN" DEFAULT 'F',
-	   CO_UF_JUNTA_COMERCIAL         VARCHAR(2),
-       IN_ASSINA_DOCUMENTO           "BOOLEAN" DEFAULT 'F',
-       IN_TIPO_CHAVE_PIX             VARCHAR(1) DEFAULT '',
-       IN_PIX_AUT                    "BOOLEAN" DEFAULT 'f',
-       ID_REC_PIX_AUT                VARCHAR(77) DEFAULT '',
-       IN_AREA_RISCO                 "BOOLEAN" DEFAULT 'f',
-       NU_ATESTE_PUBLICO             VARCHAR(80) DEFAULT '',
-       IN_DOENCA_CRONICA             "BOOLEAN" DEFAULT 'f',
-       NO_DOENCA_CRONICA             VARCHAR(150) DEFAULT '',
-       IN_VIOLENCIA_DOMESTICA        "BOOLEAN" DEFAULT 'f',
-       NO_SITUACAO_PRETEND           VARCHAR(50) DEFAULT '',
-       VA_INTERVENIENTE              DOUBLE PRECISION DEFAULT 0,
-       CO_IMOVEL_COM_IQ              VARCHAR(10) DEFAULT '',
-       IN_RESIDE_NO_IMOVEL           "BOOLEAN" DEFAULT 'f'
-);
-
-CREATE INDEX XIF129PESSOA_PRETENDENTE ON PESSOA_PRETENDENTE
-(
-       NU_PRETENDENTE
-);
-
-CREATE INDEX ICPF_PESSOA_PRETENDENTE ON PESSOA_PRETENDENTE (NU_CPFCNPJ);
-
-CREATE INDEX IDX_CO_MUNICIPIO ON PESSOA_PRETENDENTE (CO_MUNICIPIO, NU_PRETENDENTE);
-
-CREATE INDEX IDX_NO_PESSOA_PRETENDENTE ON PESSOA_PRETENDENTE (NO_PESSOA);
-
-CREATE INDEX IDX_NU_PRETENDENTE_PESSOA ON PESSOA_PRETENDENTE (NU_PRETENDENTE, NU_PESSOA);
-
-ALTER TABLE PESSOA_PRETENDENTE
-       ADD CONSTRAINT XPKPESSOA_PRETENDENTE PRIMARY KEY (NU_PESSOA,
-              NU_PRETENDENTE);
-
-ALTER TABLE PESSOA_PRETENDENTE
-       ADD CONSTRAINT R_PESSOA_PRINCIPAL
-              FOREIGN KEY (NU_PESSOA_PRINCIPAL, NU_PRETENDENTE)
-                             REFERENCES PESSOA_PRETENDENTE
-                             ON DELETE CASCADE;
-
-      /*
-      ACTION is CREATE Table PRETENDENTE
-      */	   

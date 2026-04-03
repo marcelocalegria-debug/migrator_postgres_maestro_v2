@@ -1,5 +1,6 @@
 #!/bin/bash
-
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
 # 1. Configurações Iniciais
 DIRETORIO_BASE="/migracao_firebird"
 TABELA=$1
