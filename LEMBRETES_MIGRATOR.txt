@@ -1,6 +1,6 @@
-CHECKLIST - DRAFT PASSOS MIGRACAO 
+## CHECKLIST MIGRACAO BANCO SCCI C6 
 
-PRE-MIGRACAO (ANTES DA JANELA)
+###  PRE-MIGRACAO (ANTES DA JANELA)
 1-Obter o cria.sql do esquema Postgres na mesma versao do SCCI no firebird
 2-Reset da base no posgres (reciar com o oscript de criacao)
 3-Configuração do postgresql.conf e pg_hba.conf já com os parametros producao
@@ -10,7 +10,7 @@ PRE-MIGRACAO (ANTES DA JANELA)
 7-Aumetar CPU e memória do servidor Equinix
 8-Levar antes NMOV (NU_MAC) e LOG_EVENTOS (DT_DATA_HORA) até uma data de corte? (NAO HÁ ESSA FUNCIONALIDADE NO MIGRATOR AINDA)
 
-MIGRACAO (JANELA)
+### MIGRACAO (JANELA)
 1-Baixar o banco firebird e copiar o arquivo para /databases no servidor equinix - Tempo?
 2-Rodar o Postgres Converter para as tabelas menores
 3-Rodar o chama_migrator.py para as 9 tabelas maiores (nohup &)
@@ -22,7 +22,7 @@ MIGRACAO (JANELA)
 9-Gerar o backup do postgres na Equinix e tranferir para o EC2 do C6
 10-Importar o backup
 
-POS-MIGRACAO
+### POS-MIGRACAO
 1-Backup lógico para garantir a integridade dos dados
 2-Backup fisico
 3-Ativar archivelog
