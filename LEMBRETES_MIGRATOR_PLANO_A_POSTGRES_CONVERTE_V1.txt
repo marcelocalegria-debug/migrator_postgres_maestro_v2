@@ -68,6 +68,10 @@ EXIT;
 ##########################################################################################################
 
 ----------------------------------------------------------------------------------------------------------
+0 -  Apaga *.log *.md para nao confundir dos testes anteriores e do ./logs
+----------------------------------------------------------------------------------------------------------
+
+----------------------------------------------------------------------------------------------------------
 1- Criar o database zerado c6_producao usando o CRIACAO_NOVO_BANCO_POSTGRES_C6_PROD_EC2_V2.SQL
 ----------------------------------------------------------------------------------------------------------
 
@@ -92,7 +96,55 @@ EXIT;
 
 
 ----------------------------------------------------------------------------------------------------------
-3- Rodar a migracao das 10 maiores abaixo - 18:48
+3- Liga o monitor - 19:10
+----------------------------------------------------------------------------------------------------------
+
+
+-- liga o monitory.py em outra sessao
+sudo su - postgres
+
+cd /migracao_firebird
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+export PYTHONIOENCODING=utf-8
+source .venv/bin/activate
+# Monitorar em outra janela
+python monitor.py --big-tables
+
+################# SO DOCUMENTACAO - NAO USAR 
+
+                        python monitor.py                          # painel com todas as migrações detectadas
+                        python monitor.py --state-db X.db          # detalhe de uma tabela específica
+
+                                             Comando                           │                    O que mostra                    │
+                     ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+                     │ python monitor.py                                          │ Tudo: todas as tabelas + as 5 linhas do doc_oper   │
+                     │                                                            │ (total + t0…t3)                                    │
+                     ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+                     │ python monitor.py --big-tables                             │ Só as 10 tabelas grandes, incluindo as threads do  │
+                     │                                                            │ doc_oper (total + t0…t3)                           │
+                     ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+                     │ python monitor.py --state-db                               │ Só o painel detalhado do total agregado            │
+                     │ migration_state_documento_operacao.db                      │                                                    │
+                     ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+                     │ python monitor.py --state-db                               │ Só o detalhe da thread 0                           │
+                     │ migration_state_documento_operacao_t0.db                   │                                                    │
+                     └────────────────────────────────────────────────────────────┴────────────────────────────────────────────────────┘
+
+                        python monitor.py --summary                # resumo tabular de todas as tabelas
+                        python monitor.py --history 50             # histórico de batches (requer --state-db)
+                        python monitor.py --json                   # JSON (requer --state-db)
+                        python monitor.py --constraints            # ver constraints de todas as tabelas
+                        python monitor.py -i 5                     # refresh a cada 5s (padrão: 2s)
+
+                        python monitor.py --big-tables              # painel ao vivo das 10 tabelas grandes
+                        python monitor.py --big-tables -i 5        # refresh a cada 5s
+                        python monitor.py --big-tables --summary   # resumo tabular das 10 grandes
+
+
+
+----------------------------------------------------------------------------------------------------------
+4- Rodar a migracao das 8 maiores abaixo - 19:10  - 20:10
 ----------------------------------------------------------------------------------------------------------
 
 sudo su - postgres
@@ -112,144 +164,54 @@ nohup ./chama_migrator.sh NMOV &
 nohup ./chama_migrator.sh OCORRENCIA_SISAT &
 nohup ./chama_migrator.sh PESSOA_PRETENDENTE &
 
+
+----------------------------------------------------------------------------------------------------------
+5- Rodar a migracao das 2 maiores LOG_EVENTOS e DOCUMENTO_OPERACAO em paralelo  abaixo - 19:11 - 20:11
+----------------------------------------------------------------------------------------------------------
+
+
+-- DOCUMENTO_OPERACAO
+
 nohup ./chama_migrator_doc_oper.sh   &
 
 -- LOG_EVENTOS PARALLEL
 
-
-  Uso:
   # Migração completa com 8 threads (padrão)
-  nohup bash migrator_log_eventos.sh > nohup_log_eventos.out 2>&1 &
-
-  # Sobrescrever número de threads
-  bash migrator_log_eventos.sh --threads 4
-
-  # Dry-run (conta linhas, não migra)
-  bash migrator_log_eventos.sh --dry-run
-
-  # Resetar estado e recomeçar do zero
-  bash migrator_log_eventos.sh --reset
-
-  # Monitorar em outra janela
-  python monitor.py --big-tables
+  nohup migrator_log_eventos.sh > nohup_log_eventos.out 2>&1 &
 
 
-
--- SMALL TABLES
-
-  # Dar permissão (uma vez)
-  chmod +x migrator_smalltables.sh
-
-  # Rodar em nohup
-  nohup ./migrator_smalltables.sh > nohup_smalltables.out 2>&1 &
-
-  nohup ./migrator_smalltables.sh > nohup_smalltables_3faltando.out 2>&1 &
-
+                  ##### ALTERNATIVAS SÓ PARA DOCUMENTAR -- NAO USAR !!!! #####
+                  ### Sobrescrever número de threads
+                  ##bash migrator_log_eventos.sh --threads 4
+                  ### Dry-run (conta linhas, não migra)
+                  ##bash migrator_log_eventos.sh --dry-run
+                  ### Resetar estado e recomeçar do zero
+                  ##bash migrator_log_eventos.sh --reset
+                  ### Monitorar em outra janela
+                  ##python monitor.py --big-tables
 
 
-  # Acompanhar log
-  tail -f nohup_smalltables.out
+----------------------------------------------------------------------------------------------------------
+6- Rodar a criacao dos indices, PKs e constraints check somente das 10 maiores - tabelas_10_so_pks_constraints_check_e_indices.sql
+----------------------------------------------------------------------------------------------------------
 
-  # Monitor em outra janela
-  python monitor.py --small-tables
+  (.venv) postgres@postgres-server-sp2:/migracao_firebird$ psql
+   Pager usage is off.
+   psql (18.0 (Debian 18.0-1.pgdg13+3))
+   Type "help" for help.
 
-  O "$@" passa qualquer argumento extra diretamente ao Python, então funciona:
+   postgres=# \c c6_producao
+   You are now connected to database "c6_producao" as user "postgres".
 
-  nohup ./migrator_smalltables.sh --dry-run > nohup_smalltables.out 2>&1 &
-  nohup ./migrator_smalltables.sh --reset   > nohup_smalltables.out 2>&1 &
-  nohup ./migrator_smalltables.sh --workers 6 > nohup_smalltables.out 2>&1 &
-
-
-  python monitor.py --big-tables  
-
-
-### MONITOR.py
-
-   sudo su - postgres
-
-   cd /migracao_firebird
-   export LANG=C.UTF-8
-   export LC_ALL=C.UTF-8
-   export PYTHONIOENCODING=utf-8
-   source .venv/bin/activate
-   python monitor.py
+  tabelas_10_so_pks_constraints_check_e_indices.sql
 
 
-
-    python monitor.py                          # painel com todas as migrações detectadas
-    python monitor.py --state-db X.db          # detalhe de uma tabela específica
-
-                         Comando                           │                    O que mostra                    │
-  ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
-  │ python monitor.py                                          │ Tudo: todas as tabelas + as 5 linhas do doc_oper   │
-  │                                                            │ (total + t0…t3)                                    │
-  ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
-  │ python monitor.py --big-tables                             │ Só as 10 tabelas grandes, incluindo as threads do  │
-  │                                                            │ doc_oper (total + t0…t3)                           │
-  ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
-  │ python monitor.py --state-db                               │ Só o painel detalhado do total agregado            │
-  │ migration_state_documento_operacao.db                      │                                                    │
-  ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
-  │ python monitor.py --state-db                               │ Só o detalhe da thread 0                           │
-  │ migration_state_documento_operacao_t0.db                   │                                                    │
-  └────────────────────────────────────────────────────────────┴────────────────────────────────────────────────────┘
-
-    python monitor.py --summary                # resumo tabular de todas as tabelas
-    python monitor.py --history 50             # histórico de batches (requer --state-db)
-    python monitor.py --json                   # JSON (requer --state-db)
-    python monitor.py --constraints            # ver constraints de todas as tabelas
-    python monitor.py -i 5                     # refresh a cada 5s (padrão: 2s)
-
-    python monitor.py --big-tables              # painel ao vivo das 10 tabelas grandes
-    python monitor.py --big-tables -i 5        # refresh a cada 5s
-    python monitor.py --big-tables --summary   # resumo tabular das 10 grandes
-
-### APOS A CARGA
-
-#### HABILITA CONSTRAINTS BIG-TABLES
-
-   (.venv) postgres@postgres-server-sp2:/migracao_firebird/logs$ cd ..
-   -rw-rw-r-- 1 postgres postgres 22228 Apr  3 14:10 enable_constraints.py
-   (.venv) postgres@postgres-server-sp2:/migracao_firebird$  python enable_constraints.py
-   20:37:26 [INFO   ] ======================================================================
-   20:37:26 [INFO   ]   ENABLE CONSTRAINTS — EXECUÇÃO
-   20:37:26 [INFO   ]   Tabelas: 10
-   20:37:26 [INFO   ]   Banco  : c6_producao @ localhost:5432
-   20:37:26 [INFO   ]   Log    : enable_constraints_20260407_203726.log
-   20:37:26 [INFO   ] ======================================================================
-   20:37:26 [INFO   ]
-   20:37:26 [INFO   ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   20:37:26 [INFO   ]   Tabela: parcelasctb  (enable_constraints_parcelasctb.sql)
-   20:37:26 [INFO   ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+----------------------------------------------------------------------------------------------------------
+7- Indices faltando na LOG_EVENTOS
+----------------------------------------------------------------------------------------------------------
 
 
-   A FASE 2 do migrator_smalltables.py chama cman.enable_all() para cada tabela completada, que
-   recria nesta ordem:
-
-   ┌───────┬────────────────────────────────┐
-   │ Ordem │              Tipo              │
-   ├───────┼────────────────────────────────┤
-   │ 1º    │ Índices explícitos             │
-   ├───────┼────────────────────────────────┤
-   │ 2º    │ PKs                            │
-   ├───────┼────────────────────────────────┤
-   │ 3º    │ Unique constraints             │
-   ├───────┼────────────────────────────────┤
-   │ 4º    │ Check constraints              │
-   ├───────┼────────────────────────────────┤
-   │ 5º    │ FKs próprias (tabela → outras) │
-   ├───────┼────────────────────────────────┤
-   │ 6º    │ FKs filhas (outras → tabela)   │
-   ├───────┼────────────────────────────────┤
-
-   │ 7º    │ Triggers                       │
-   └───────┴────────────────────────────────┘
-
-   Detalhe importante: só re-habilita as tabelas com status completed no master state DB. Se uma tabela falhar, as
-   constraints dela não são reabilitadas — e o log vai avisar com a instrução manual para executar o
-   enable_constraints_{dest}.sql gerado.
-
-#### AJUSTES DOS INDICE SDE LOG_EVENTOS
+  #### AJUSTES DOS INDICE SDE LOG_EVENTOS
 
   -- log_eventos: índices do Firebird migrados para PostgreSQL
   -- ATENÇÃO: colunas multi-coluna estão em ordem alfabética (verificar ordem original no FB)
@@ -285,127 +247,140 @@ nohup ./chama_migrator_doc_oper.sh   &
       ON public.log_eventos (co_aplic, co_detalhe, dt_data_detalhe);
 
 
-  ---
-  movimentos_passivo — IDX só no PG
-
-  O FB tem co_contrato e nu_cercefhab (ambos existem também no PG, então se cancelam). Os 3 extras (dt_geracao_arquivo,
-  no_arquivo_gerado, dt_geracao_arquivo,nu_cercefhab) existem só no PG — foram criados diretamente lá, provavelmente por
-   um DBA para tuning de performance. Não é um problema, são índices a mais.
-
-  ---
-  status_documento_operacao — IDX só no FB
-
-  O índice (nu_documento, nu_sequencial) existe no FB mas não foi migrado para PG. Criar se necessário:
-
-  CREATE INDEX idx_status_documento_operacao_nu_doc_seq
-      ON public.status_documento_operacao (nu_documento, nu_sequencial);
-
-  ---
-  tab_cartorio — IDX só no FB
-
-  O PG já tem tab_cartoriox01/02/03 (que batem com o FB), mas o índice nu_municipio não foi migrado:
-
-  CREATE INDEX idx_tab_cartorio_nu_municipio
-      ON public.tab_cartorio (nu_municipio);
-
-  ---
-  Em resumo: 2 índices realmente faltando no PG, e 1 tabela com índices extras criados no PG após a migração. Tudo
-  esperado, nada crítico
-
-
-
-#### compara estrutura
-
-   python gera_relatorio_compara_estrutura_fb2pg_html.py  --output relatorio_final_08abr1637.html
-
-   /*
-   #Executar verificação:
-   #bash# Verificação completa
-
-   #python compara_estrutura_fb2pg.py
-
-   # Com progresso detalhado
-   python compara_estrutura_fb2pg.py --verbose
-
-   # Gerar relatório HTML visual
-   #python gera_relatorio_html.py --output relatorio.html
-   */
-
-
-#### CHECKSUM 
+----------------------------------------------------------------------------------------------------------
+8- Checksum em paralelo das 10 maiores
+----------------------------------------------------------------------------------------------------------
 
 (.venv) postgres@postgres-server-sp2:/migracao_firebird$ 
 
   Fluxo paralelo:
-  1. Dispara 10 threads simultaneamente, cada uma com conexões FB+PG próprias
-  2. Conforme terminam, imprime ✓ tabela  X.Xs  (N/10) em tempo real
-  3. Após todas completarem, exibe os detalhes de cada tabela na ordem original
-  4. Exibe o resumo consolidado final
+   1. Dispara 10 threads simultaneamente, cada uma com conexões FB+PG próprias
+   2. Conforme terminam, imprime ✓ tabela  X.Xs  (N/10) em tempo real
+   3. Após todas completarem, exibe os detalhes de cada tabela na ordem original
+   4. Exibe o resumo consolidado final
 
-  Uso:
   # Todas as 10 em paralelo (padrão)
   python PosMigracao_comparaChecksum_bytea.py
 
 
-  # Verificar só uma tabela (modo sequencial, com barra de progresso)
-  python PosMigracao_comparaChecksum_bytea.py --table DOCUMENTO_OPERACAO
-
-  # Controle de concorrência
-  python PosMigracao_comparaChecksum_bytea.py --workers 5
-
-
+            ############### outras formas de chamar caso necessario
+            # Verificar só uma tabela (modo sequencial, com barra de progresso)
+            #python PosMigracao_comparaChecksum_bytea.py --table DOCUMENTO_OPERACAO
+            # Controle de concorrência
+            #python PosMigracao_comparaChecksum_bytea.py --workers 5
 
 
 
 
+        --------->> SOMENTE APÓS O TERMINO DO POSTGRES CONVERTER <<----------------
+
+
+----------------------------------------------------------------------------------------------------------
+9 - Rodar a criacao constraints   (SÓ NO FINAL DE TUDO!!!!!!!!!!!!!! - ESPERAR O POSTGRES CONVERTE TERMINAR)
+----------------------------------------------------------------------------------------------------------
+
+  (.venv) postgres@postgres-server-sp2:/migracao_firebird$ psql
+   Pager usage is off.
+   psql (18.0 (Debian 18.0-1.pgdg13+3))
+   Type "help" for help.
+
+   postgres=# \c c6_producao
+   You are now connected to database "c6_producao" as user "postgres".
+
+      tabelas_10_so_constraints_fk.sql
+
+ 
+----------------------------------------------------------------------------------------------------------
+10 - Comparar estrutura e gera relatorio final HTML
+----------------------------------------------------------------------------------------------------------
+
+   python gera_relatorio_compara_estrutura_fb2pg_html.py  --output relatorio_final_09abr.html
+
+    
+            ### MODO TEXTO SE NECESSARIO 
+            #Executar verificação:
+            #bash# Verificação completa
+            #python compara_estrutura_fb2pg.py
+            # Com progresso detalhado
+            #python compara_estrutura_fb2pg.py --verbose
+
+
+
+----------------------------------------------------------------------------------------------------------
+11 - ANLYZE VERBOSE (100% da tabela para maior precisao no PLANNER do postgres, o padrao é 100 linhas)
+----------------------------------------------------------------------------------------------------------
+
+
+   psql
+   \c c6_producao
+
+   SET default_statistics_target = 10000; -- Máximo permitido (10.000)
+   ANALYZE VERBOSE;
+
+----------------------------------------------------------------------------------------------------------
+12 - GERAR O BACKUP PARA SER LEVADO PARA O EC2
+----------------------------------------------------------------------------------------------------------
+
+bash# EXPORT (com paralelizacao) - gera um diretorio
+
+
+mkdir -p /migracao_firebird/backup/c6_producao_dir
+
+/usr/bin/pg_dump \
+  -h localhost -p 5432  -U c6_producao_user \
+  -d c6_producao_dir \
+  -F d -j 10 \
+  -C -v \
+  -f  /migracao_firebird/backup/c6_producao_dir \
+2>&1 | tee -a /migracao_firebird/backup/backup-c6_producao.log
+
+
+----------------------------------------------------------------------------------------------------------
+13 - TRANSFERIR OS ARQUIVOS PARA O EC2 PRODUCAO COM SCP (ZECA)
+----------------------------------------------------------------------------------------------------------
+
+
+
+----------------------------------------------------------------------------------------------------------
+14 - CRIAR O DATABASE NA PRODUCAO E IMPORTAR O BACKUP
+----------------------------------------------------------------------------------------------------------
+
+Criar o database zerado c6_producao usando o CRIACAO_NOVO_BANCO_POSTGRES_C6_PROD_EC2_V2.SQL
+
+# IMPORT
+/usr/bin/pg_restore \
+  -h localhost \
+  -p 5432 \
+  -U c6_producao_user \
+  -d c6_producao_dir \
+  -F c \
+  -j 10 \
+  -C \
+  -v \
+  /backup/backup_logico/c6_producao.bak \
+2>&1 | tee -a /migracao_firebird/backup/restaurar-c6_alegria_tambem_apagar.log
+
+5tEkZZwRydTUXarJ
+
+
+----------------------------------------------------------------------------------------------------------
+15 - LIGAR ARCHIVE, FAZER O 1O BACKUP LOGICO, FISICO, VACUUM, REBUILD, ANALYZE...
+----------------------------------------------------------------------------------------------------------
+
+
+
+----------------------------------------------------------------------------------------------------------
+16 - CONFERIR A REPLICA DO POSTGRES NO LAKE
+----------------------------------------------------------------------------------------------------------
 
 
 
 
 
 
-
-
-
-
-
-
-
- $env:PGCLIENTENCODING="latin1"
- $env:PGPASSWORD = "senha_prod"
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_ocorrencia.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_controleversao.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_documento_operacao.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_historico_operacao.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_log_eventos.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_nmov.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_ocorrencia.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_ocorrencia_sisat.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_operacao_credito.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_parcelasctb.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_pessoa_pretendente.sql
-
-
-#### NAO PRECISA - python migrator_parallel_doc_oper.py --threads 4
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+-------------------------------------------------------------
 -- trobleshooting OOM Killer
+-------------------------------------------------------------
 
 Para confirmar se o OOM Killer entrou em ação e "assassinou" o seu processo Python, você deve consultar os logs do kernel do Linux.Use um destes comandos (como root ou com sudo):
 
@@ -468,9 +443,7 @@ oot@postgres-server-sp:/migracao_firebird/logs# sudo dmesg -T | grep -i -E 'oom|
 root@postgres-server-sp:/migracao_firebird/logs#
 
 
-
-
--- conferencia
+-- conferencia manual
 SELECT 'CONTROLEVERSAO' AS tabela, COUNT(*) AS total FROM CONTROLEVERSAO
 UNION ALL
 SELECT 'LOG_EVENTOS', COUNT(*) FROM LOG_EVENTOS
@@ -492,16 +465,7 @@ UNION ALL
 SELECT 'DOCUMENTO_OPERACAO', COUNT(*) FROM DOCUMENTO_OPERACAO;
 
 
-
-##########################################################################################################
-
--- old nao USAR
--- cria.sql
-
-#psql -h localhost -p 5432 -U "c6_producao_user" -d c6_producao -W < /migracao_firebird/cria976_pg.sql  | tee -a /migracao_firebird/imp_cria_976_7abril.log
-
-5tEkZZwRydTUXarJ
-
+-- DOC
 
 10 maiores tabelas 
 

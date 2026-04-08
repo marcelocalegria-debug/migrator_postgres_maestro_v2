@@ -18,7 +18,7 @@ postgresql:
   host: "localhost"
   port: 5432
   database: "c6_producao"
-  user: "c6_producao"
+  user: "c6_producao_user"
   password: "5tEkZZwRydTUXarJ"
   schema: "public"
 
