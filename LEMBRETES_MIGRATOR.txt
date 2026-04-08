@@ -246,6 +246,58 @@ nohup ./chama_migrator_doc_oper.sh   &
    constraints dela não são reabilitadas — e o log vai avisar com a instrução manual para executar o
    enable_constraints_{dest}.sql gerado.
 
+#### AJUSTES DOS INDICE SDE LOG_EVENTOS
+
+  -- log_eventos: índices do Firebird migrados para PostgreSQL
+  -- ATENÇÃO: colunas multi-coluna estão em ordem alfabética (verificar ordem original no FB)
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_co_aplic
+      ON public.log_eventos (co_aplic);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_dt_data_hora
+      ON public.log_eventos (dt_data_hora);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_nu_contrato
+      ON public.log_eventos (nu_contrato);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_co_aplic_dt_data_hora
+      ON public.log_eventos (co_aplic, dt_data_hora);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_dt_data_hora_no_base
+      ON public.log_eventos (dt_data_hora, no_base);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_dt_data_hora_no_tabela
+      ON public.log_eventos (dt_data_hora, no_tabela);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_dt_data_hora_nu_contrato
+      ON public.log_eventos (dt_data_hora, nu_contrato);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_dt_data_hora_nu_pretendente
+      ON public.log_eventos (dt_data_hora, nu_pretendente);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_co_aplic_dt_data_hora_no_usuario
+      ON public.log_eventos (co_aplic, dt_data_hora, no_usuario);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_co_aplic_co_detalhe_dt_data_detalhe
+      ON public.log_eventos (co_aplic, co_detalhe, dt_data_detalhe);
+
+  Para verificar a ordem original das colunas no Firebird antes de aplicar:
+
+  SELECT
+      TRIM(i.RDB$INDEX_NAME) as idx_name,
+      TRIM(sg.RDB$FIELD_NAME) as col_name,
+      sg.RDB$FIELD_POSITION as pos
+  FROM RDB$INDICES i
+  JOIN RDB$INDEX_SEGMENTS sg ON i.RDB$INDEX_NAME = sg.RDB$INDEX_NAME
+  WHERE TRIM(i.RDB$RELATION_NAME) = 'LOG_EVENTOS'
+    AND i.RDB$SYSTEM_FLAG = 0
+    AND NOT EXISTS (
+        SELECT 1 FROM RDB$RELATION_CONSTRAINTS rc
+        WHERE rc.RDB$INDEX_NAME = i.RDB$INDEX_NAME
+    )
+  ORDER BY i.RDB$INDEX_NAME, sg.RDB$FIELD_POSITION;
+
+
 
 #### compara estrutura
 
@@ -278,7 +330,7 @@ nohup ./chama_migrator_doc_oper.sh   &
   Uso:
   # Todas as 10 em paralelo (padrão)
   python PosMigracao_comparaChecksum_bytea.py
-  
+
 
   # Verificar só uma tabela (modo sequencial, com barra de progresso)
   python PosMigracao_comparaChecksum_bytea.py --table DOCUMENTO_OPERACAO

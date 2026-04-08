@@ -155,7 +155,7 @@ def _fb_get_pk(conn, table: str) -> Optional[Set[str]]:
           AND rc.RDB$CONSTRAINT_TYPE = 'PRIMARY KEY'
         ORDER BY sg.RDB$FIELD_POSITION
     """, (table,))
-    cols = [row[0] for row in cur.fetchall()]
+    cols = [row[0].lower() for row in cur.fetchall()]
     return set(cols) if cols else None
 
 
@@ -214,31 +214,33 @@ def _pg_get_fks(conn, schema: str, table: str) -> Set[Tuple[str, str, str]]:
     """
     Retorna conjunto de FKs da tabela PostgreSQL.
     Retorna: {(coluna_origem, tabela_destino, coluna_destino), ...}
+    Usa pg_constraint com unnest paralelo para evitar produto cartesiano
+    em FKs compostas (bug do information_schema.constraint_column_usage).
     """
     cur = conn.cursor()
     cur.execute("""
-        SELECT 
-            kcu.column_name as col_origem,
-            ccu.table_name as tabela_destino,
-            ccu.column_name as col_destino
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu
-          ON tc.constraint_name = kcu.constraint_name
-          AND tc.table_schema = kcu.table_schema
-        JOIN information_schema.constraint_column_usage ccu
-          ON tc.constraint_name = ccu.constraint_name
-          AND tc.table_schema = ccu.table_schema
-        WHERE tc.table_schema = %s
-          AND tc.table_name = %s
-          AND tc.constraint_type = 'FOREIGN KEY'
-        ORDER BY kcu.ordinal_position
+        SELECT
+            att1.attname AS col_origem,
+            cls2.relname AS tabela_destino,
+            att2.attname AS col_destino
+        FROM pg_constraint con
+        JOIN pg_class cls1 ON con.conrelid = cls1.oid
+        JOIN pg_namespace nsp ON cls1.relnamespace = nsp.oid
+        JOIN pg_class cls2 ON con.confrelid = cls2.oid,
+            unnest(con.conkey, con.confkey) AS u(local_att, ref_att)
+        JOIN pg_attribute att1 ON att1.attrelid = con.conrelid AND att1.attnum = u.local_att
+        JOIN pg_attribute att2 ON att2.attrelid = con.confrelid AND att2.attnum = u.ref_att
+        WHERE nsp.nspname = %s
+          AND cls1.relname = %s
+          AND con.contype = 'f'
+        ORDER BY con.conname, u.local_att
     """, (schema, table))
-    
+
     fks = set()
     for row in cur.fetchall():
         col_origem, tabela_destino, col_destino = row
         fks.add((col_origem.lower(), tabela_destino.lower(), col_destino.lower()))
-    
+
     return fks
 
 
@@ -407,7 +409,10 @@ def _pg_get_checks(conn, schema: str, table: str) -> Set[str]:
           AND constraint_type = 'CHECK'
         ORDER BY constraint_name
     """, (schema, table))
-    return {row[0].lower() for row in cur.fetchall()}
+    # Filtrar constraints _not_null: são NOT NULL de colunas armazenados como
+    # CHECK pelo migrador — no Firebird NOT NULL é atributo de coluna, não constraint.
+    return {row[0].lower() for row in cur.fetchall()
+            if not row[0].lower().endswith('_not_null')}
 
 
 # ─── Comparação de Estruturas ─────────────────────────────────────────────────
