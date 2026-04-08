@@ -1261,6 +1261,87 @@ class FirebirdToPgMigrator:
                 '(completed são puladas automaticamente).')
         self.log.info('=' * 70)
 
+    # ─── enable-constraints standalone ────────────────────────
+
+    def run_enable_constraints(self, dry_run: bool = False):
+        """
+        Reabilita todos os constraints usando os constraint_state_*.json
+        existentes no diretório de trabalho.
+
+        Não depende do master state DB nem refaz nenhuma carga de dados.
+        Usa os mesmos arquivos gerados pela FASE 0 do run_small_tables().
+
+        Flags:
+            --small-tables --enable-constraints           executa
+            --small-tables --enable-constraints --dry-run lista o que faria
+        """
+        cfg_pg = self.config['postgresql']
+        schema = cfg_pg.get('schema', 'public')
+        pg_params = {
+            'host':     cfg_pg['host'],
+            'port':     cfg_pg.get('port', 5432),
+            'database': cfg_pg['database'],
+            'user':     cfg_pg['user'],
+            'password': cfg_pg['password'],
+        }
+
+        state_files = sorted(BASE_DIR.glob('constraint_state_*.json'))
+        if not state_files:
+            self.log.error(
+                '  Nenhum arquivo constraint_state_*.json encontrado. '
+                'Execute primeiro a migração completa (FASE 0 gera esses arquivos).')
+            return
+
+        self.log.info('=' * 70)
+        self.log.info('  RE-ENABLE DE CONSTRAINTS (modo standalone)')
+        self.log.info(f'  Arquivos encontrados: {len(state_files)}')
+        if dry_run:
+            self.log.info('  DRY-RUN: nenhuma alteração será feita')
+        self.log.info('=' * 70)
+
+        ok_count    = 0
+        skip_count  = 0
+        error_count = 0
+        errors      = []
+
+        for i, state_path in enumerate(state_files, 1):
+            # Extrai nome da tabela do nome do arquivo: constraint_state_{dest}.json
+            dest = state_path.stem.removeprefix('constraint_state_')
+
+            if i % 50 == 0 or i == len(state_files):
+                self.log.info(f'  [{i:>4}/{len(state_files)}] processando {dest}...')
+
+            if dry_run:
+                continue
+
+            try:
+                cman = ConstraintManager(pg_params, schema, dest)
+                cman.load_state(str(state_path))
+                if not cman.dropped_objects:
+                    skip_count += 1
+                    continue
+                cman.enable_all()
+                ok_count += 1
+            except Exception as e:
+                error_count += 1
+                errors.append((dest, str(e)))
+                self.log.warning(f'  [{dest}] ERRO: {e}')
+
+        self.log.info('')
+        self.log.info('─' * 70)
+        if dry_run:
+            self.log.info(f'  DRY-RUN: {len(state_files)} tabelas seriam processadas.')
+        else:
+            self.log.info(f'  Reabilitadas : {ok_count}')
+            self.log.info(f'  Sem objetos  : {skip_count}')
+            self.log.info(f'  Erros        : {error_count}')
+            if errors:
+                self.log.warning('  Tabelas com erro (execute manualmente):')
+                for dest, msg in errors:
+                    self.log.warning(f'    psql -f enable_constraints_{dest}.sql')
+                    self.log.warning(f'    Motivo: {msg}')
+        self.log.info('─' * 70)
+
     # ─── loop principal ─────────────────────────────────────
 
     def run(self, dry_run=False, scripts_only=False):
@@ -1632,6 +1713,11 @@ Exemplos (901 tabelas pequenas — modo paralelo):
                    help='Migra as ~901 tabelas pequenas em paralelo. '
                         'Use config_smalltables.yaml como configuração. '
                         'Tabelas completed são puladas automaticamente.')
+    p.add_argument('--enable-constraints', action='store_true',
+                   help='Reabilita constraints usando os constraint_state_*.json '
+                        'existentes (requer --small-tables). '
+                        'Útil quando a FASE 2 não chegou a executar. '
+                        'Não refaz nenhuma carga de dados.')
     p.add_argument('--workers', type=int, default=None,
                    metavar='N',
                    help='Número de processos paralelos para --small-tables '
@@ -1668,11 +1754,14 @@ Exemplos (901 tabelas pequenas — modo paralelo):
                                   override_batch_size=args.batch_size,
                                   use_insert=args.use_insert)
         try:
-            m.run_small_tables(
-                dry_run=args.dry_run,
-                reset=args.reset,
-                n_workers=args.workers,
-            )
+            if args.enable_constraints:
+                m.run_enable_constraints(dry_run=args.dry_run)
+            else:
+                m.run_small_tables(
+                    dry_run=args.dry_run,
+                    reset=args.reset,
+                    n_workers=args.workers,
+                )
         except KeyboardInterrupt:
             print('\nInterrompido.')
             sys.exit(130)

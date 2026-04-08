@@ -22,8 +22,10 @@ import os
 import sys
 import hashlib
 import argparse
+import threading
 from datetime import datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import yaml
 import psycopg2
@@ -321,6 +323,65 @@ def comparar_sem_pk(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Worker para execução paralela (thread-safe — conexões próprias)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _run_one_table(cfg: dict, fb_table: str, pg_table: str, schema: str) -> dict:
+    """Executa toda a verificação de checksum para uma tabela.
+    Thread-safe: cria e fecha suas próprias conexões FB e PG.
+    """
+    t0 = datetime.now()
+    result: dict = {
+        "tabela": pg_table, "fb_table": fb_table, "ok": False,
+        "n_colunas": 0, "linhas": None, "divergencias": 0,
+        "pk_cols": [], "blob_cols": [], "stats": None, "errors": [],
+        "elapsed": 0.0, "error": None,
+    }
+    try:
+        conn_fb = connect_fb(cfg)
+        conn_pg = connect_pg(cfg)
+        try:
+            blob_cols_fb  = get_blob_binary_columns_fb(conn_fb, fb_table)
+            bytea_cols_pg = get_bytea_columns_pg(conn_pg, pg_table, schema)
+            shared_cols   = [c for c in blob_cols_fb if c in bytea_cols_pg]
+            result["blob_cols"] = shared_cols
+            result["n_colunas"] = len(shared_cols)
+
+            if not shared_cols:
+                result["ok"]   = True
+                result["nota"] = "sem colunas BLOB binário"
+                return result
+
+            pk_cols = get_pk_columns_pg(conn_pg, pg_table, schema)
+            result["pk_cols"] = pk_cols
+
+            if pk_cols:
+                total, stats, errors = comparar_com_pk(
+                    conn_fb, conn_pg, fb_table, pg_table,
+                    pk_cols, shared_cols, schema,
+                )
+                n_divs = sum(s["diff"] + s["only_fb"] + s["only_pg"]
+                             for s in stats.values())
+                result.update(ok=n_divs == 0, linhas=total,
+                              divergencias=n_divs, stats=stats, errors=errors)
+            else:
+                stats  = comparar_sem_pk(conn_fb, conn_pg, fb_table, pg_table,
+                                         shared_cols, schema)
+                n_divs = sum(0 if s["match"] else abs(s["count_fb"] - s["count_pg"])
+                             for s in stats.values())
+                result.update(ok=n_divs == 0, divergencias=n_divs, stats=stats)
+        finally:
+            conn_fb.close()
+            conn_pg.close()
+    except Exception as exc:
+        result["error"]        = str(exc)
+        result["ok"]           = False
+        result["divergencias"] = -1
+    result["elapsed"] = (datetime.now() - t0).total_seconds()
+    return result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Saída Rich
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -486,7 +547,9 @@ def parse_args():
     p.add_argument("--config", default="config.yaml", help="Arquivo de configuração")
     p.add_argument("--table",  default=None,
                    help="Processar apenas esta tabela (nome Firebird ou PostgreSQL, ex: OPERACAO_CREDITO ou operacao_credito)")
-    p.add_argument("--schema", default="public", help="Schema PostgreSQL (padrão: public)")
+    p.add_argument("--schema",  default="public", help="Schema PostgreSQL (padrão: public)")
+    p.add_argument("--workers", type=int, default=10,
+                   help="Tabelas em paralelo (padrão: 10 = todas simultâneas; use 1 para sequencial)")
     return p.parse_args()
 
 
@@ -513,97 +576,181 @@ def main():
             console.print(f"[dim]Tabelas disponíveis (Firebird/PostgreSQL): {nomes}[/dim]")
             sys.exit(1)
 
-    try:
-        conn_fb = connect_fb(cfg)
-        conn_pg = connect_pg(cfg)
-    except Exception as e:
-        console.print(f"[bold red]Erro ao conectar:[/bold red] {e}")
-        sys.exit(1)
+    n_workers = min(args.workers, len(tabelas))
 
-    results = []
+    # ── Modo sequencial (tabela única ou --workers 1) ─────────────────────────
+    if n_workers <= 1:
+        try:
+            conn_fb = connect_fb(cfg)
+            conn_pg = connect_pg(cfg)
+        except Exception as e:
+            console.print(f"[bold red]Erro ao conectar:[/bold red] {e}")
+            sys.exit(1)
 
-    for fb_table, pg_table in tabelas:
-        console.print(f"[dim]Analisando[/dim] [bold]{pg_table}[/bold]...", end=" ")
+        results = []
 
-        # Descoberta de colunas
-        blob_cols_fb = get_blob_binary_columns_fb(conn_fb, fb_table)
-        bytea_cols_pg = get_bytea_columns_pg(conn_pg, pg_table, schema)
+        for fb_table, pg_table in tabelas:
+            console.print(f"[dim]Analisando[/dim] [bold]{pg_table}[/bold]...", end=" ")
 
-        # Intersecção: colunas que existem como blob binário no FB E bytea no PG
-        shared_cols = [c for c in blob_cols_fb if c in bytea_cols_pg]
+            blob_cols_fb  = get_blob_binary_columns_fb(conn_fb, fb_table)
+            bytea_cols_pg = get_bytea_columns_pg(conn_pg, pg_table, schema)
+            shared_cols   = [c for c in blob_cols_fb if c in bytea_cols_pg]
 
-        if not shared_cols:
-            console.print(
-                f"[yellow]nenhuma coluna BLOB binário↔BYTEA encontrada "
-                f"(FB={blob_cols_fb}, PG={bytea_cols_pg})[/yellow]"
-            )
-            results.append({
-                "tabela": pg_table, "ok": True,
-                "n_colunas": 0, "linhas": 0, "divergencias": 0,
-                "nota": "sem colunas BLOB binário",
-            })
-            continue
-
-        console.print(f"[dim]colunas: {shared_cols}[/dim]")
-
-        pk_cols = get_pk_columns_pg(conn_pg, pg_table, schema)
-        n_divs  = 0
-
-        if pk_cols:
-            # Conta linhas para barra de progresso
-            cur_fb = conn_fb.cursor()
-            cur_fb.execute(f"SELECT COUNT(*) FROM {fb_table}")
-            total_fb = cur_fb.fetchone()[0]
-
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(bar_width=30),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                TextColumn("[cyan]{task.completed:,}[/cyan]/[dim]{task.total:,}[/dim]"),
-                TimeElapsedColumn(),
-                console=console,
-                transient=True,
-            ) as progress:
-                task = progress.add_task(
-                    f"  Comparando {pg_table}", total=total_fb
+            if not shared_cols:
+                console.print(
+                    f"[yellow]nenhuma coluna BLOB binário↔BYTEA encontrada "
+                    f"(FB={blob_cols_fb}, PG={bytea_cols_pg})[/yellow]"
                 )
-                total, stats, errors = comparar_com_pk(
-                    conn_fb, conn_pg, fb_table, pg_table,
-                    pk_cols, shared_cols, schema,
-                    progress=progress, task=task,
-                )
+                results.append({
+                    "tabela": pg_table, "ok": True,
+                    "n_colunas": 0, "linhas": 0, "divergencias": 0,
+                    "nota": "sem colunas BLOB binário",
+                })
+                continue
 
-            table_ok = print_table_result_with_pk(
-                pg_table, pk_cols, shared_cols, total, stats, errors
-            )
-            n_divs = sum(s["diff"] + s["only_fb"] + s["only_pg"]
-                         for s in stats.values())
+            console.print(f"[dim]colunas: {shared_cols}[/dim]")
+
+            pk_cols = get_pk_columns_pg(conn_pg, pg_table, schema)
+            n_divs  = 0
+
+            if pk_cols:
+                cur_fb = conn_fb.cursor()
+                cur_fb.execute(f"SELECT COUNT(*) FROM {fb_table}")
+                total_fb = cur_fb.fetchone()[0]
+
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(bar_width=30),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    TextColumn("[cyan]{task.completed:,}[/cyan]/[dim]{task.total:,}[/dim]"),
+                    TimeElapsedColumn(),
+                    console=console,
+                    transient=True,
+                ) as progress:
+                    task = progress.add_task(
+                        f"  Comparando {pg_table}", total=total_fb
+                    )
+                    total, stats, errors = comparar_com_pk(
+                        conn_fb, conn_pg, fb_table, pg_table,
+                        pk_cols, shared_cols, schema,
+                        progress=progress, task=task,
+                    )
+
+                table_ok = print_table_result_with_pk(
+                    pg_table, pk_cols, shared_cols, total, stats, errors
+                )
+                n_divs = sum(s["diff"] + s["only_fb"] + s["only_pg"]
+                             for s in stats.values())
+                results.append({
+                    "tabela": pg_table, "ok": table_ok,
+                    "n_colunas": len(shared_cols),
+                    "linhas": total,
+                    "divergencias": n_divs,
+                })
+            else:
+                stats    = comparar_sem_pk(conn_fb, conn_pg, fb_table, pg_table,
+                                           shared_cols, schema)
+                table_ok = print_table_result_no_pk(pg_table, shared_cols, stats)
+                n_divs   = sum(0 if s["match"] else abs(s["count_fb"] - s["count_pg"])
+                               for s in stats.values())
+                results.append({
+                    "tabela": pg_table, "ok": table_ok,
+                    "n_colunas": len(shared_cols),
+                    "linhas": None,
+                    "divergencias": n_divs,
+                })
+
+        conn_fb.close()
+        conn_pg.close()
+
+    # ── Modo paralelo: N workers, cada um com conexões próprias ───────────────
+    else:
+        console.print(
+            f"[bold cyan]Modo paralelo:[/bold cyan] "
+            f"{n_workers} tabelas simultâneas  "
+            f"[dim]({len(tabelas)} tabelas no total)[/dim]\n"
+        )
+
+        ordered_results: list = [None] * len(tabelas)
+        lock      = threading.Lock()
+        completed = 0
+
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            futures = {
+                pool.submit(_run_one_table, cfg, fb, pg, schema): (idx, pg)
+                for idx, (fb, pg) in enumerate(tabelas)
+            }
+
+            for future in as_completed(futures):
+                idx, pg_table = futures[future]
+                try:
+                    res = future.result()
+                except Exception as exc:
+                    res = {
+                        "tabela": pg_table, "ok": False,
+                        "n_colunas": 0, "linhas": None,
+                        "divergencias": -1, "error": str(exc),
+                        "pk_cols": [], "blob_cols": [],
+                        "stats": None, "errors": [], "elapsed": 0.0,
+                    }
+                ordered_results[idx] = res
+                with lock:
+                    completed += 1
+                    status  = "[green]✓[/green]" if res["ok"] else "[red]✗[/red]"
+                    elapsed = res.get("elapsed", 0.0)
+                    console.print(
+                        f"  {status} [cyan]{pg_table}[/cyan]  "
+                        f"[dim]{elapsed:.1f}s[/dim]  "
+                        f"[dim]({completed}/{len(tabelas)})[/dim]"
+                    )
+
+        console.print()
+
+        # Exibe detalhes de cada tabela na ordem original, depois coleta results
+        results = []
+        for res in ordered_results:
+            pg_table  = res["tabela"]
+            blob_cols = res.get("blob_cols") or []
+            pk_cols   = res.get("pk_cols")   or []
+            stats     = res.get("stats")
+            errors    = res.get("errors")    or []
+
+            if res.get("error"):
+                console.print(
+                    f"[red]✗ {pg_table}:[/red] [dim]{res['error']}[/dim]\n"
+                )
+                results.append({
+                    "tabela": pg_table, "ok": False,
+                    "n_colunas": 0, "linhas": None, "divergencias": -1,
+                })
+                continue
+
+            if not blob_cols:
+                console.print(
+                    f"[dim]{pg_table}: nenhuma coluna BLOB binário↔BYTEA — ignorada[/dim]"
+                )
+                results.append({
+                    "tabela": pg_table, "ok": True,
+                    "n_colunas": 0, "linhas": 0, "divergencias": 0,
+                    "nota": "sem colunas BLOB binário",
+                })
+                continue
+
+            if pk_cols:
+                table_ok = print_table_result_with_pk(
+                    pg_table, pk_cols, blob_cols,
+                    res["linhas"], stats, errors,
+                )
+            else:
+                table_ok = print_table_result_no_pk(pg_table, blob_cols, stats)
 
             results.append({
                 "tabela": pg_table, "ok": table_ok,
-                "n_colunas": len(shared_cols),
-                "linhas": total,
-                "divergencias": n_divs,
+                "n_colunas": res["n_colunas"],
+                "linhas": res.get("linhas"),
+                "divergencias": res["divergencias"],
             })
-
-        else:
-            # Tabela sem PK — comparação por contagem
-            stats    = comparar_sem_pk(conn_fb, conn_pg, fb_table, pg_table,
-                                       shared_cols, schema)
-            table_ok = print_table_result_no_pk(pg_table, shared_cols, stats)
-            n_divs   = sum(0 if s["match"] else abs(s["count_fb"] - s["count_pg"])
-                           for s in stats.values())
-
-            results.append({
-                "tabela": pg_table, "ok": table_ok,
-                "n_colunas": len(shared_cols),
-                "linhas": None,
-                "divergencias": n_divs,
-            })
-
-    conn_fb.close()
-    conn_pg.close()
 
     elapsed = (datetime.now() - t_inicio).total_seconds()
     print_final_summary(results, elapsed)

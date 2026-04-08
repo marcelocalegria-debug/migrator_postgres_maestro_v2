@@ -101,7 +101,6 @@ CREATE TABLE public.tmp_exc_log (
 
 
 nohup ./chama_migrator.sh CONTROLEVERSAO &
-nohup ./chama_migrator.sh LOG_EVENTOS &
 nohup ./chama_migrator.sh HISTORICO_OPERACAO &
 nohup ./chama_migrator.sh OCORRENCIA &
 nohup ./chama_migrator.sh PARCELASCTB &
@@ -111,6 +110,26 @@ nohup ./chama_migrator.sh OCORRENCIA_SISAT &
 nohup ./chama_migrator.sh PESSOA_PRETENDENTE &
 
 nohup ./chama_migrator_doc_oper.sh   &
+
+-- LOG_EVENTOS PARALLEL
+
+
+  Uso:
+  # Migração completa com 8 threads (padrão)
+  nohup bash migrator_log_eventos.sh > nohup_log_eventos.out 2>&1 &
+
+  # Sobrescrever número de threads
+  bash migrator_log_eventos.sh --threads 4
+
+  # Dry-run (conta linhas, não migra)
+  bash migrator_log_eventos.sh --dry-run
+
+  # Resetar estado e recomeçar do zero
+  bash migrator_log_eventos.sh --reset
+
+  # Monitorar em outra janela
+  python monitor.py --big-tables
+
 
 
 -- SMALL TABLES
@@ -138,17 +157,19 @@ nohup ./chama_migrator_doc_oper.sh   &
   nohup ./migrator_smalltables.sh --workers 6 > nohup_smalltables.out 2>&1 &
 
 
+  python monitor.py --big-tables  
+
 
 ### MONITOR.py
 
-sudo su - postgres
+   sudo su - postgres
 
-cd /migracao_firebird
-export LANG=C.UTF-8
-export LC_ALL=C.UTF-8
-export PYTHONIOENCODING=utf-8
-source .venv/bin/activate
-python monitor.py
+   cd /migracao_firebird
+   export LANG=C.UTF-8
+   export LC_ALL=C.UTF-8
+   export PYTHONIOENCODING=utf-8
+   source .venv/bin/activate
+   python monitor.py
 
 
 
@@ -182,38 +203,88 @@ python monitor.py
 
 ### APOS A CARGA
 
-#### HABILITA CONSTRAINTS
+#### HABILITA CONSTRAINTS BIG-TABLES
 
-(.venv) postgres@postgres-server-sp2:/migracao_firebird/logs$ cd ..
--rw-rw-r-- 1 postgres postgres 22228 Apr  3 14:10 enable_constraints.py
-(.venv) postgres@postgres-server-sp2:/migracao_firebird$  python enable_constraints.py
-20:37:26 [INFO   ] ======================================================================
-20:37:26 [INFO   ]   ENABLE CONSTRAINTS — EXECUÇÃO
-20:37:26 [INFO   ]   Tabelas: 10
-20:37:26 [INFO   ]   Banco  : c6_producao @ localhost:5432
-20:37:26 [INFO   ]   Log    : enable_constraints_20260407_203726.log
-20:37:26 [INFO   ] ======================================================================
-20:37:26 [INFO   ]
-20:37:26 [INFO   ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-20:37:26 [INFO   ]   Tabela: parcelasctb  (enable_constraints_parcelasctb.sql)
-20:37:26 [INFO   ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   (.venv) postgres@postgres-server-sp2:/migracao_firebird/logs$ cd ..
+   -rw-rw-r-- 1 postgres postgres 22228 Apr  3 14:10 enable_constraints.py
+   (.venv) postgres@postgres-server-sp2:/migracao_firebird$  python enable_constraints.py
+   20:37:26 [INFO   ] ======================================================================
+   20:37:26 [INFO   ]   ENABLE CONSTRAINTS — EXECUÇÃO
+   20:37:26 [INFO   ]   Tabelas: 10
+   20:37:26 [INFO   ]   Banco  : c6_producao @ localhost:5432
+   20:37:26 [INFO   ]   Log    : enable_constraints_20260407_203726.log
+   20:37:26 [INFO   ] ======================================================================
+   20:37:26 [INFO   ]
+   20:37:26 [INFO   ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   20:37:26 [INFO   ]   Tabela: parcelasctb  (enable_constraints_parcelasctb.sql)
+   20:37:26 [INFO   ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+   A FASE 2 do migrator_smalltables.py chama cman.enable_all() para cada tabela completada, que
+   recria nesta ordem:
+
+   ┌───────┬────────────────────────────────┐
+   │ Ordem │              Tipo              │
+   ├───────┼────────────────────────────────┤
+   │ 1º    │ Índices explícitos             │
+   ├───────┼────────────────────────────────┤
+   │ 2º    │ PKs                            │
+   ├───────┼────────────────────────────────┤
+   │ 3º    │ Unique constraints             │
+   ├───────┼────────────────────────────────┤
+   │ 4º    │ Check constraints              │
+   ├───────┼────────────────────────────────┤
+   │ 5º    │ FKs próprias (tabela → outras) │
+   ├───────┼────────────────────────────────┤
+   │ 6º    │ FKs filhas (outras → tabela)   │
+   ├───────┼────────────────────────────────┤
+
+   │ 7º    │ Triggers                       │
+   └───────┴────────────────────────────────┘
+
+   Detalhe importante: só re-habilita as tabelas com status completed no master state DB. Se uma tabela falhar, as
+   constraints dela não são reabilitadas — e o log vai avisar com a instrução manual para executar o
+   enable_constraints_{dest}.sql gerado.
+
+
+#### compara estrutura
+
+   python gera_relatorio_compara_estrutura_fb2pg_html.py  --output relatorio_final_08abr1637.html
+
+   /*
+   #Executar verificação:
+   #bash# Verificação completa
+
+   #python compara_estrutura_fb2pg.py
+
+   # Com progresso detalhado
+   python compara_estrutura_fb2pg.py --verbose
+
+   # Gerar relatório HTML visual
+   #python gera_relatorio_html.py --output relatorio.html
+   */
+
 
 #### CHECKSUM 
 
-(.venv) postgres@postgres-server-sp2:/migracao_firebird$ python PosMigracao_comparaChecksum_bytea.py
+(.venv) postgres@postgres-server-sp2:/migracao_firebird$ 
 
-╭────────────────────────────────────────────────────────╮
-│                                                        │
-│    Verificação Pós-Migração                            │
-│    Checksum MD5 — BLOB Firebird vs BYTEA PostgreSQL    │
-│                                                        │
-╰────────────────────────────────────────────────────────╯
-Início: 07/04/2026 20:42:40
+  Fluxo paralelo:
+  1. Dispara 10 threads simultaneamente, cada uma com conexões FB+PG próprias
+  2. Conforme terminam, imprime ✓ tabela  X.Xs  (N/10) em tempo real
+  3. Após todas completarem, exibe os detalhes de cada tabela na ordem original
+  4. Exibe o resumo consolidado final
 
-Analisando controleversao... colunas: ['dado', 'te_observacao_versao', 'te_imagem_reduzida']
+  Uso:
+  # Todas as 10 em paralelo (padrão)
+  python PosMigracao_comparaChecksum_bytea.py
+  
 
+  # Verificar só uma tabela (modo sequencial, com barra de progresso)
+  python PosMigracao_comparaChecksum_bytea.py --table DOCUMENTO_OPERACAO
 
-
+  # Controle de concorrência
+  python PosMigracao_comparaChecksum_bytea.py --workers 5
 
 
 

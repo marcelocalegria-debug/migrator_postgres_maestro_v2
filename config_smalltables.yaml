@@ -12,6 +12,7 @@ firebird:
   database: "/firebird/data/c6emb.fdb"
   user: "SYSDBA"
   password: "masterkey"
+  #charset: "WIN1252"
   charset: iso-8859-1
 
 postgresql:
