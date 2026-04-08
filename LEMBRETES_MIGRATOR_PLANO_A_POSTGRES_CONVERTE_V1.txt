@@ -1,0 +1,517 @@
+##########################################################################################################
+# MIGRACAO C6
+##########################################################################################################
+
+
+
+(.venv) postgres@postgres-server-sp2:/migracao_firebird$ ls -alrt /databases/scci.gdb
+total 21231600
+-rw-r--r--  1 root root          13 Mar 31 10:40 senhabd-firebird
+drwxr-xr-x 21 root root        4096 Apr  4 13:41 ..
+drwxr-xr-x  2 root root        4096 Apr  7 18:01 .
+-rw-r-----  1 root root 21741142016 Apr  8 13:50 scci.gdb
+Bstikqxd_yat
+
+
+sudo su - postgres
+
+cd /migracao_firebird
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+export PYTHONIOENCODING=utf-8
+source .venv/bin/activate
+
+
+### SERVIDOR EQUINIX FIREBIRD  - 10.3.98.143
+
+-- COMO ROOT  - tá na 976   iechiev9ohH?
+
+
+(.venv) postgres@postgres-server-sp2:/migracao_firebird$ cd /databases
+(.venv) postgres@postgres-server-sp2:/databases$ ls -alrt
+total 21231600
+-rw-r--r--  1 root root          13 Mar 31 10:40 senhabd-firebird
+drwxr-xr-x 21 root root        4096 Apr  4 13:41 ..
+drwxr-xr-x  2 root root        4096 Apr  7 18:01 .
+-rw-r-----  1 root root 21741142016 Apr  7 18:09 scci.gdb
+(.venv) postgres@postgres-server-sp2:/databases$
+
+
+testa a conectividade
+
+#  root
+
+/opt/firebird/bin/isql
+CONNECT '/databases/scci.gdb' USER 'SYSDBA' PASSWORD 'Bstikqxd_yat';
+
+SELECT COUNT(RDB$RELATION_NAME) 
+FROM RDB$RELATIONS 
+WHERE RDB$VIEW_BLR IS NULL 
+AND RDB$SYSTEM_FLAG = 0;
+
+-- postgres
+
+sudo su - postgres
+psql
+
+\c c6_producao
+
+SELECT count(*) 
+FROM information_schema.tables 
+WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+AND table_type = 'BASE TABLE';
+
+EXIT;
+
+##########################################################################################################
+## INICIO - 18:40
+##########################################################################################################
+
+----------------------------------------------------------------------------------------------------------
+1- Criar o database zerado c6_producao usando o CRIACAO_NOVO_BANCO_POSTGRES_C6_PROD_EC2_V2.SQL
+----------------------------------------------------------------------------------------------------------
+
+----------------------------------------------------------------------------------------------------------
+2- Rodar a criação das 10 tabelas:  tabelas_10_sem_constraints.sql
+----------------------------------------------------------------------------------------------------------
+
+   (.venv) postgres@postgres-server-sp2:/migracao_firebird$ psql
+   Pager usage is off.
+   psql (18.0 (Debian 18.0-1.pgdg13+3))
+   Type "help" for help.
+
+   postgres=# \c c6_producao
+   You are now connected to database "c6_producao" as user "postgres".
+   c6_producao=# -- DDL das 10 tabelas grandes: sem PK, FK e indices
+   -- Gerado em 2026-04-08
+
+   -- =============================================
+   -- Tabela: CONTROLEVERSAO
+   -- =============================================
+   ...
+
+
+----------------------------------------------------------------------------------------------------------
+3- Rodar a migracao das 10 maiores abaixo - 18:48
+----------------------------------------------------------------------------------------------------------
+
+sudo su - postgres
+
+cd /migracao_firebird
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+export PYTHONIOENCODING=utf-8
+source .venv/bin/activate
+
+nohup ./chama_migrator.sh CONTROLEVERSAO &
+nohup ./chama_migrator.sh HISTORICO_OPERACAO &
+nohup ./chama_migrator.sh OCORRENCIA &
+nohup ./chama_migrator.sh PARCELASCTB &
+nohup ./chama_migrator.sh OPERACAO_CREDITO &
+nohup ./chama_migrator.sh NMOV &
+nohup ./chama_migrator.sh OCORRENCIA_SISAT &
+nohup ./chama_migrator.sh PESSOA_PRETENDENTE &
+
+nohup ./chama_migrator_doc_oper.sh   &
+
+-- LOG_EVENTOS PARALLEL
+
+
+  Uso:
+  # Migração completa com 8 threads (padrão)
+  nohup bash migrator_log_eventos.sh > nohup_log_eventos.out 2>&1 &
+
+  # Sobrescrever número de threads
+  bash migrator_log_eventos.sh --threads 4
+
+  # Dry-run (conta linhas, não migra)
+  bash migrator_log_eventos.sh --dry-run
+
+  # Resetar estado e recomeçar do zero
+  bash migrator_log_eventos.sh --reset
+
+  # Monitorar em outra janela
+  python monitor.py --big-tables
+
+
+
+-- SMALL TABLES
+
+  # Dar permissão (uma vez)
+  chmod +x migrator_smalltables.sh
+
+  # Rodar em nohup
+  nohup ./migrator_smalltables.sh > nohup_smalltables.out 2>&1 &
+
+  nohup ./migrator_smalltables.sh > nohup_smalltables_3faltando.out 2>&1 &
+
+
+
+  # Acompanhar log
+  tail -f nohup_smalltables.out
+
+  # Monitor em outra janela
+  python monitor.py --small-tables
+
+  O "$@" passa qualquer argumento extra diretamente ao Python, então funciona:
+
+  nohup ./migrator_smalltables.sh --dry-run > nohup_smalltables.out 2>&1 &
+  nohup ./migrator_smalltables.sh --reset   > nohup_smalltables.out 2>&1 &
+  nohup ./migrator_smalltables.sh --workers 6 > nohup_smalltables.out 2>&1 &
+
+
+  python monitor.py --big-tables  
+
+
+### MONITOR.py
+
+   sudo su - postgres
+
+   cd /migracao_firebird
+   export LANG=C.UTF-8
+   export LC_ALL=C.UTF-8
+   export PYTHONIOENCODING=utf-8
+   source .venv/bin/activate
+   python monitor.py
+
+
+
+    python monitor.py                          # painel com todas as migrações detectadas
+    python monitor.py --state-db X.db          # detalhe de uma tabela específica
+
+                         Comando                           │                    O que mostra                    │
+  ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+  │ python monitor.py                                          │ Tudo: todas as tabelas + as 5 linhas do doc_oper   │
+  │                                                            │ (total + t0…t3)                                    │
+  ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+  │ python monitor.py --big-tables                             │ Só as 10 tabelas grandes, incluindo as threads do  │
+  │                                                            │ doc_oper (total + t0…t3)                           │
+  ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+  │ python monitor.py --state-db                               │ Só o painel detalhado do total agregado            │
+  │ migration_state_documento_operacao.db                      │                                                    │
+  ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+  │ python monitor.py --state-db                               │ Só o detalhe da thread 0                           │
+  │ migration_state_documento_operacao_t0.db                   │                                                    │
+  └────────────────────────────────────────────────────────────┴────────────────────────────────────────────────────┘
+
+    python monitor.py --summary                # resumo tabular de todas as tabelas
+    python monitor.py --history 50             # histórico de batches (requer --state-db)
+    python monitor.py --json                   # JSON (requer --state-db)
+    python monitor.py --constraints            # ver constraints de todas as tabelas
+    python monitor.py -i 5                     # refresh a cada 5s (padrão: 2s)
+
+    python monitor.py --big-tables              # painel ao vivo das 10 tabelas grandes
+    python monitor.py --big-tables -i 5        # refresh a cada 5s
+    python monitor.py --big-tables --summary   # resumo tabular das 10 grandes
+
+### APOS A CARGA
+
+#### HABILITA CONSTRAINTS BIG-TABLES
+
+   (.venv) postgres@postgres-server-sp2:/migracao_firebird/logs$ cd ..
+   -rw-rw-r-- 1 postgres postgres 22228 Apr  3 14:10 enable_constraints.py
+   (.venv) postgres@postgres-server-sp2:/migracao_firebird$  python enable_constraints.py
+   20:37:26 [INFO   ] ======================================================================
+   20:37:26 [INFO   ]   ENABLE CONSTRAINTS — EXECUÇÃO
+   20:37:26 [INFO   ]   Tabelas: 10
+   20:37:26 [INFO   ]   Banco  : c6_producao @ localhost:5432
+   20:37:26 [INFO   ]   Log    : enable_constraints_20260407_203726.log
+   20:37:26 [INFO   ] ======================================================================
+   20:37:26 [INFO   ]
+   20:37:26 [INFO   ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   20:37:26 [INFO   ]   Tabela: parcelasctb  (enable_constraints_parcelasctb.sql)
+   20:37:26 [INFO   ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+   A FASE 2 do migrator_smalltables.py chama cman.enable_all() para cada tabela completada, que
+   recria nesta ordem:
+
+   ┌───────┬────────────────────────────────┐
+   │ Ordem │              Tipo              │
+   ├───────┼────────────────────────────────┤
+   │ 1º    │ Índices explícitos             │
+   ├───────┼────────────────────────────────┤
+   │ 2º    │ PKs                            │
+   ├───────┼────────────────────────────────┤
+   │ 3º    │ Unique constraints             │
+   ├───────┼────────────────────────────────┤
+   │ 4º    │ Check constraints              │
+   ├───────┼────────────────────────────────┤
+   │ 5º    │ FKs próprias (tabela → outras) │
+   ├───────┼────────────────────────────────┤
+   │ 6º    │ FKs filhas (outras → tabela)   │
+   ├───────┼────────────────────────────────┤
+
+   │ 7º    │ Triggers                       │
+   └───────┴────────────────────────────────┘
+
+   Detalhe importante: só re-habilita as tabelas com status completed no master state DB. Se uma tabela falhar, as
+   constraints dela não são reabilitadas — e o log vai avisar com a instrução manual para executar o
+   enable_constraints_{dest}.sql gerado.
+
+#### AJUSTES DOS INDICE SDE LOG_EVENTOS
+
+  -- log_eventos: índices do Firebird migrados para PostgreSQL
+  -- ATENÇÃO: colunas multi-coluna estão em ordem alfabética (verificar ordem original no FB)
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_co_aplic
+      ON public.log_eventos (co_aplic);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_dt_data_hora
+      ON public.log_eventos (dt_data_hora);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_nu_contrato
+      ON public.log_eventos (nu_contrato);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_co_aplic_dt_data_hora
+      ON public.log_eventos (co_aplic, dt_data_hora);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_dt_data_hora_no_base
+      ON public.log_eventos (dt_data_hora, no_base);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_dt_data_hora_no_tabela
+      ON public.log_eventos (dt_data_hora, no_tabela);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_dt_data_hora_nu_contrato
+      ON public.log_eventos (dt_data_hora, nu_contrato);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_dt_data_hora_nu_pretendente
+      ON public.log_eventos (dt_data_hora, nu_pretendente);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_co_aplic_dt_data_hora_no_usuario
+      ON public.log_eventos (co_aplic, dt_data_hora, no_usuario);
+
+  CREATE INDEX IF NOT EXISTS idx_log_eventos_co_aplic_co_detalhe_dt_data_detalhe
+      ON public.log_eventos (co_aplic, co_detalhe, dt_data_detalhe);
+
+
+  ---
+  movimentos_passivo — IDX só no PG
+
+  O FB tem co_contrato e nu_cercefhab (ambos existem também no PG, então se cancelam). Os 3 extras (dt_geracao_arquivo,
+  no_arquivo_gerado, dt_geracao_arquivo,nu_cercefhab) existem só no PG — foram criados diretamente lá, provavelmente por
+   um DBA para tuning de performance. Não é um problema, são índices a mais.
+
+  ---
+  status_documento_operacao — IDX só no FB
+
+  O índice (nu_documento, nu_sequencial) existe no FB mas não foi migrado para PG. Criar se necessário:
+
+  CREATE INDEX idx_status_documento_operacao_nu_doc_seq
+      ON public.status_documento_operacao (nu_documento, nu_sequencial);
+
+  ---
+  tab_cartorio — IDX só no FB
+
+  O PG já tem tab_cartoriox01/02/03 (que batem com o FB), mas o índice nu_municipio não foi migrado:
+
+  CREATE INDEX idx_tab_cartorio_nu_municipio
+      ON public.tab_cartorio (nu_municipio);
+
+  ---
+  Em resumo: 2 índices realmente faltando no PG, e 1 tabela com índices extras criados no PG após a migração. Tudo
+  esperado, nada crítico
+
+
+
+#### compara estrutura
+
+   python gera_relatorio_compara_estrutura_fb2pg_html.py  --output relatorio_final_08abr1637.html
+
+   /*
+   #Executar verificação:
+   #bash# Verificação completa
+
+   #python compara_estrutura_fb2pg.py
+
+   # Com progresso detalhado
+   python compara_estrutura_fb2pg.py --verbose
+
+   # Gerar relatório HTML visual
+   #python gera_relatorio_html.py --output relatorio.html
+   */
+
+
+#### CHECKSUM 
+
+(.venv) postgres@postgres-server-sp2:/migracao_firebird$ 
+
+  Fluxo paralelo:
+  1. Dispara 10 threads simultaneamente, cada uma com conexões FB+PG próprias
+  2. Conforme terminam, imprime ✓ tabela  X.Xs  (N/10) em tempo real
+  3. Após todas completarem, exibe os detalhes de cada tabela na ordem original
+  4. Exibe o resumo consolidado final
+
+  Uso:
+  # Todas as 10 em paralelo (padrão)
+  python PosMigracao_comparaChecksum_bytea.py
+
+
+  # Verificar só uma tabela (modo sequencial, com barra de progresso)
+  python PosMigracao_comparaChecksum_bytea.py --table DOCUMENTO_OPERACAO
+
+  # Controle de concorrência
+  python PosMigracao_comparaChecksum_bytea.py --workers 5
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ $env:PGCLIENTENCODING="latin1"
+ $env:PGPASSWORD = "senha_prod"
+ psql -p 5435 c6_producao  -U postgres -f enable_constraints_ocorrencia.sql
+ psql -p 5435 c6_producao  -U postgres -f enable_constraints_controleversao.sql
+ psql -p 5435 c6_producao  -U postgres -f enable_constraints_documento_operacao.sql
+ psql -p 5435 c6_producao  -U postgres -f enable_constraints_historico_operacao.sql
+ psql -p 5435 c6_producao  -U postgres -f enable_constraints_log_eventos.sql
+ psql -p 5435 c6_producao  -U postgres -f enable_constraints_nmov.sql
+ psql -p 5435 c6_producao  -U postgres -f enable_constraints_ocorrencia.sql
+ psql -p 5435 c6_producao  -U postgres -f enable_constraints_ocorrencia_sisat.sql
+ psql -p 5435 c6_producao  -U postgres -f enable_constraints_operacao_credito.sql
+ psql -p 5435 c6_producao  -U postgres -f enable_constraints_parcelasctb.sql
+ psql -p 5435 c6_producao  -U postgres -f enable_constraints_pessoa_pretendente.sql
+
+
+#### NAO PRECISA - python migrator_parallel_doc_oper.py --threads 4
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-- trobleshooting OOM Killer
+
+Para confirmar se o OOM Killer entrou em ação e "assassinou" o seu processo Python, você deve consultar os logs do kernel do Linux.Use um destes comandos (como root ou com sudo):
+
+1. O comando mais rápido (dmesg)O dmesg mostra as mensagens diretas do kernel. Filtre por "OOM" ou "Killed":
+bash
+
+sudo dmesg -T | grep -i -E 'oom|killed'
+
+   -T converte o timestamp do kernel para data/hora legível.Procure por linhas que dizem: "Out of memory: Killed process [PID] (python)".
+
+2. Consultando o log do sistema (journalctl)No Debian 13, o journalctl é a forma mais detalhada de ver o histórico:
+bash
+
+sudo journalctl -k --since "2 hour ago" | grep -i "out of memory"
+
+Isso mostrará apenas as mensagens de kernel da última hora.
+
+3. O arquivo de log tradicionalSe preferir ler o arquivo bruto (pode ser grande):
+bash
+
+sudo grep -i "killed process" /var/log/syslog
+
+# OU
+
+sudo grep -i "killed process" /var/log/kern.log
+
+O que você verá no log:Se foi o OOM Killer, você verá uma tabela de processos e uma mensagem final parecida com esta:
+
+Out of memory: Killed process 4085278 (python) total-vm:12345kB, anon-rss:6789kB, file-rss:0kB, shmem-rss:0kB
+
+
+CONTROLEVERSAO
+
+10:46:16 [INFO   ] migrator:   [██████████████████░░░░░░░░░░░░]  60.1% |      260,000/     432,602 | Lote    26 |      1,507 lin/s | ETA      1m54s | 2m52s
+10:46:23 [INFO   ] migrator:   [██████████████████░░░░░░░░░░░░]  62.4% |      270,000/     432,602 | Lote    27 |      1,507 lin/s | ETA      1m47s | 2m59s
+10:46:29 [INFO   ] migrator:   [███████████████████░░░░░░░░░░░]  64.7% |      280,000/     432,602 | Lote    28 |      1,510 lin/s | ETA      1m41s | 3m05s
+10:46:35 [INFO   ] migrator:   [████████████████████░░░░░░░░░░]  67.0% |      290,000/     432,602 | Lote    29 |      1,520 lin/s | ETA      1m33s | 3m10s
+10:46:41 [INFO   ] migrator:   [████████████████████░░░░░░░░░░]  69.3% |      300,000/     432,602 | Lote    30 |      1,523 lin/s | ETA      1m27s | 3m16s
+10:46:47 [INFO   ] migrator:   [█████████████████████░░░░░░░░░]  71.7% |      310,000/     432,602 | Lote    31 |      1,528 lin/s | ETA      1m20s | 3m22s
+10:46:52 [INFO   ] migrator:   [██████████████████████░░░░░░░░]  74.0% |      320,000/     432,602 | Lote    32 |      1,535 lin/s | ETA      1m13s | 3m28s
+10:48:35 [INFO   ] migrator:   [██████████████████████░░░░░░░░]  76.3% |      330,000/     432,602 | Lote    33 |      1,061 lin/s | ETA      1m36s | 5m11s
+10:52:39 [INFO   ] migrator:   [███████████████████████░░░░░░░]  78.6% |      340,000/     432,602 | Lote    34 |        612 lin/s | ETA      2m31s | 9m15s
+./chama_migrator.sh, linha 43: 4085278 Morto                   python migrator.py --table "$TABELA"
+
+[PASSO 2] Rodando Comparação de Checksum...
+..
+
+root@postgres-server-sp:/migracao_firebird/logs# sudo journalctl -k --since "2 hour ago" | grep -i "out of memory"
+
+Apr 03 10:54:33 postgres-server-sp kernel: Out of memory: Killed process 4085278 (python) total-vm:7143916kB, anon-rss:3726536kB, file-rss:0kB, shmem-rss:0kB, UID:101 pgtables:12980kB oom_score_adj:0
+root@postgres-server-sp:/migracao_firebird/logs#
+
+oot@postgres-server-sp:/migracao_firebird/logs# sudo dmesg -T | grep -i -E 'oom|killed' | tail -6
+[Thu Apr  2 23:15:06 2026] Out of memory: Killed process 3850626 (python) total-vm:7082244kB, anon-rss:3712448kB, file-rss:60kB, shmem-rss:0kB, UID:101 pgtables:12772kB oom_score_adj:0
+[Fri Apr  3 10:53:22 2026] head invoked oom-killer: gfp_mask=0x140cca(GFP_HIGHUSER_MOVABLE|__GFP_COMP), order=0, oom_score_adj=0
+[Fri Apr  3 10:53:22 2026]  oom_kill_process.cold+0x8/0x8d
+[Fri Apr  3 10:53:22 2026] [  pid  ]   uid  tgid total_vm      rss rss_anon rss_file rss_shmem pgtables_bytes swapents oom_score_adj name
+[Fri Apr  3 10:53:22 2026] oom-kill:constraint=CONSTRAINT_NONE,nodemask=(null),cpuset=/,mems_allowed=0,global_oom,task_memcg=/user.slice/user-1003.slice/session-6708.scope,task=python,pid=4085278,uid=101
+[Fri Apr  3 10:53:22 2026] Out of memory: Killed process 4085278 (python) total-vm:7143916kB, anon-rss:3726536kB, file-rss:0kB, shmem-rss:0kB, UID:101 pgtables:12980kB oom_score_adj:0
+root@postgres-server-sp:/migracao_firebird/logs#
+
+
+
+
+-- conferencia
+SELECT 'CONTROLEVERSAO' AS tabela, COUNT(*) AS total FROM CONTROLEVERSAO
+UNION ALL
+SELECT 'LOG_EVENTOS', COUNT(*) FROM LOG_EVENTOS
+UNION ALL
+SELECT 'HISTORICO_OPERACAO', COUNT(*) FROM HISTORICO_OPERACAO
+UNION ALL
+SELECT 'OCORRENCIA', COUNT(*) FROM OCORRENCIA
+UNION ALL
+SELECT 'PARCELASCTB', COUNT(*) FROM PARCELASCTB
+UNION ALL
+SELECT 'OPERACAO_CREDITO', COUNT(*) FROM OPERACAO_CREDITO
+UNION ALL
+SELECT 'PESSOA_PRETENDENTE', COUNT(*) FROM PESSOA_PRETENDENTE
+UNION ALL
+SELECT 'NMOV', COUNT(*) FROM NMOV
+UNION ALL
+SELECT 'OCORRENCIA_SISAT', COUNT(*) FROM OCORRENCIA_SISAT
+UNION ALL
+SELECT 'DOCUMENTO_OPERACAO', COUNT(*) FROM DOCUMENTO_OPERACAO;
+
+
+
+##########################################################################################################
+
+-- old nao USAR
+-- cria.sql
+
+#psql -h localhost -p 5432 -U "c6_producao_user" -d c6_producao -W < /migracao_firebird/cria976_pg.sql  | tee -a /migracao_firebird/imp_cria_976_7abril.log
+
+5tEkZZwRydTUXarJ
+
+
+10 maiores tabelas 
+
+CONTROLEVERSAO
+HISTORICO_OPERACAO
+OCORRENCIA
+PARCELASCTB
+OPERACAO_CREDITO
+NMOV
+OCORRENCIA_SISAT
+PESSOA_PRETENDENTE
+DOCUMENTO_OPERACAO
+LOG_EVENTOS

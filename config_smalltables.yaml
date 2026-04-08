@@ -9,17 +9,16 @@
 firebird:
   host: "localhost"
   port: 3050
-  database: "/firebird/data/c6emb.fdb"
+  database: "/databases/scci.gdb"
   user: "SYSDBA"
-  password: "masterkey"
-  #charset: "WIN1252"
+  password: "Bstikqxd_yat"
   charset: iso-8859-1
 
 postgresql:
   host: "localhost"
-  port: 5435
-  database: "c6_alegria"
-  user: "c6_alegria_user"
+  port: 5432
+  database: "c6_producao"
+  user: "c6_producao"
   password: "5tEkZZwRydTUXarJ"
   schema: "public"
 

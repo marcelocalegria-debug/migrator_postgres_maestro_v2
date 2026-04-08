@@ -16,3 +16,8 @@ fb/
 # Virtual environments
 .venv
 .env
+config*.yaml
+*.md
+*.json
+*.DOCKER
+*.html
