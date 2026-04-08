@@ -192,7 +192,7 @@ nohup ./chama_migrator_doc_oper.sh   &
 
 
 ----------------------------------------------------------------------------------------------------------
-6- Rodar a criacao dos indices, PKs e constraints check somente das 10 maiores - tabelas_10_so_pks_constraints_check_e_indices.sql
+6- Rodar a criacao dos indices, PKs e constraints check somente das 10 maiores - tabelas_10_so_pks_constraints_check_e_indices.sql - inicio 20:23 - término - 22:26
 ----------------------------------------------------------------------------------------------------------
 
   (.venv) postgres@postgres-server-sp2:/migracao_firebird$ psql
@@ -202,14 +202,15 @@ nohup ./chama_migrator_doc_oper.sh   &
 
    postgres=# \c c6_producao
    You are now connected to database "c6_producao" as user "postgres".
+ 
+  -- inicio 20:23
 
   tabelas_10_so_pks_constraints_check_e_indices.sql
 
 
 ----------------------------------------------------------------------------------------------------------
-7- Indices faltando na LOG_EVENTOS
+7- Indices faltando na LOG_EVENTOS  - inicio 20:26 - término - 22:27
 ----------------------------------------------------------------------------------------------------------
-
 
   #### AJUSTES DOS INDICE SDE LOG_EVENTOS
 
@@ -248,7 +249,7 @@ nohup ./chama_migrator_doc_oper.sh   &
 
 
 ----------------------------------------------------------------------------------------------------------
-8- Checksum em paralelo das 10 maiores
+8- Checksum em paralelo das 10 maiores - inicio 20:28
 ----------------------------------------------------------------------------------------------------------
 
 (.venv) postgres@postgres-server-sp2:/migracao_firebird$ 
@@ -270,9 +271,15 @@ nohup ./chama_migrator_doc_oper.sh   &
             #python PosMigracao_comparaChecksum_bytea.py --workers 5
 
 
-
-
-        --------->> SOMENTE APÓS O TERMINO DO POSTGRES CONVERTER <<----------------
+--------->> SOMENTE APÓS O TERMINO DO POSTGRES CONVERTER <<----------------
+--------->> SOMENTE APÓS O TERMINO DO POSTGRES CONVERTER <<----------------
+--------->> SOMENTE APÓS O TERMINO DO POSTGRES CONVERTER <<----------------
+--------->> SOMENTE APÓS O TERMINO DO POSTGRES CONVERTER <<----------------
+--------->> SOMENTE APÓS O TERMINO DO POSTGRES CONVERTER <<----------------
+--------->> SOMENTE APÓS O TERMINO DO POSTGRES CONVERTER <<----------------
+--------->> SOMENTE APÓS O TERMINO DO POSTGRES CONVERTER <<----------------
+--------->> SOMENTE APÓS O TERMINO DO POSTGRES CONVERTER <<----------------
+--------->> SOMENTE APÓS O TERMINO DO POSTGRES CONVERTER <<----------------
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -303,7 +310,6 @@ nohup ./chama_migrator_doc_oper.sh   &
             #python compara_estrutura_fb2pg.py
             # Com progresso detalhado
             #python compara_estrutura_fb2pg.py --verbose
-
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -441,28 +447,6 @@ oot@postgres-server-sp:/migracao_firebird/logs# sudo dmesg -T | grep -i -E 'oom|
 [Fri Apr  3 10:53:22 2026] oom-kill:constraint=CONSTRAINT_NONE,nodemask=(null),cpuset=/,mems_allowed=0,global_oom,task_memcg=/user.slice/user-1003.slice/session-6708.scope,task=python,pid=4085278,uid=101
 [Fri Apr  3 10:53:22 2026] Out of memory: Killed process 4085278 (python) total-vm:7143916kB, anon-rss:3726536kB, file-rss:0kB, shmem-rss:0kB, UID:101 pgtables:12980kB oom_score_adj:0
 root@postgres-server-sp:/migracao_firebird/logs#
-
-
--- conferencia manual
-SELECT 'CONTROLEVERSAO' AS tabela, COUNT(*) AS total FROM CONTROLEVERSAO
-UNION ALL
-SELECT 'LOG_EVENTOS', COUNT(*) FROM LOG_EVENTOS
-UNION ALL
-SELECT 'HISTORICO_OPERACAO', COUNT(*) FROM HISTORICO_OPERACAO
-UNION ALL
-SELECT 'OCORRENCIA', COUNT(*) FROM OCORRENCIA
-UNION ALL
-SELECT 'PARCELASCTB', COUNT(*) FROM PARCELASCTB
-UNION ALL
-SELECT 'OPERACAO_CREDITO', COUNT(*) FROM OPERACAO_CREDITO
-UNION ALL
-SELECT 'PESSOA_PRETENDENTE', COUNT(*) FROM PESSOA_PRETENDENTE
-UNION ALL
-SELECT 'NMOV', COUNT(*) FROM NMOV
-UNION ALL
-SELECT 'OCORRENCIA_SISAT', COUNT(*) FROM OCORRENCIA_SISAT
-UNION ALL
-SELECT 'DOCUMENTO_OPERACAO', COUNT(*) FROM DOCUMENTO_OPERACAO;
 
 
 -- DOC
