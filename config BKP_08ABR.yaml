@@ -1,0 +1,45 @@
+firebird:
+  host: "localhost"
+  port: 3050
+  database: "/firebird/data/c6emb.fdb"
+  user: "SYSDBA"
+  password: "masterkey"
+  #charset: "WIN1252"
+  charset: iso-8859-1
+
+postgresql:
+  host: "localhost"
+  port: 5435
+  database: "c6_producao"
+  user: "c6_producao_user"
+  password: "5tEkZZwRydTUXarJ"
+  schema: "public"
+
+migration:
+  # Lista de tabelas a migrar (sequencialmente).
+  # Cada entrada gera arquivos:
+  #   disable_constraints_{dest}.sql
+  #   enable_constraints_{dest}.sql
+  #   constraint_state_{dest}.json
+  #   migration_state_{dest}.db
+  tables:
+    - source: "LOG_EVENTOS"
+      dest: "log_eventos"
+
+  batch_size: 10000              # [PERF] linhas por batch COPY
+  fetch_array_size: 10000        # [PERF] buffer do cursor Firebird
+  max_retries: 3
+  retry_delay_seconds: 3
+
+performance:
+  work_mem: "256MB"
+  maintenance_work_mem: "1GB"    # [PERF] aumentado para CREATE INDEX rápido
+  # Dica: no postgresql.conf, durante a carga:
+  #   max_wal_size = 4GB
+  #   checkpoint_completion_target = 0.9
+  #   wal_level = minimal  (requer restart, CUIDADO em produção)
+
+logging:
+  level: "INFO"
+  file: "migration.log"
+  console: true

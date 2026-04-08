@@ -127,9 +127,89 @@ def _read_recent(db_path: Path, n: int = 6, retries: int = 3) -> list:
     return []
 
 
+# Tabelas grandes migradas pelo migrator.py / migrator_parallel_doc_oper.py
+BIG_TABLES = {
+    'documento_operacao',
+    'log_eventos',
+    'historico_operacao',
+    'ocorrencia_sisat',
+    'ocorrencia',
+    'nmov',
+    'operacao_credito',
+    'parcelasctb',
+    'pessoa_pretendente',
+    'controleversao',
+}
+
+
 def _discover_dbs() -> list[Path]:
     """Descobre todos os migration_state_*.db no diretório do script."""
     return sorted(BASE_DIR.glob('migration_state_*.db'))
+
+
+def _filter_dbs(dbs: list, only: set) -> list:
+    """
+    Filtra lista de DBs mantendo os cujo nome está em `only` (exato)
+    OU cujo nome começa com algum prefixo de `only` (cobre threads _tN).
+    Ex.: 'documento_operacao' em `only` inclui 'documento_operacao_t0', '_t1', etc.
+    """
+    result = []
+    for d in dbs:
+        name = d.stem.removeprefix('migration_state_')
+        if name in only:
+            result.append(d)
+            continue
+        if any(name.startswith(prefix + '_t') for prefix in only):
+            result.append(d)
+    return result
+
+
+def _read_master_state(db_path: Path) -> dict:
+    """
+    Lê o master state das tabelas pequenas.
+    Retorna dict com summary + lista de tabelas running/recently active.
+    """
+    result = {
+        'summary': {'pending': 0, 'running': 0, 'completed': 0, 'failed': 0, 'total': 0},
+        'running_tables': [],
+        'recent_failed': [],
+    }
+    if not db_path.exists():
+        return result
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=3)
+        conn.execute('PRAGMA journal_mode=WAL')
+
+        # Sumário por status
+        for status, count in conn.execute(
+                "SELECT status, COUNT(*) FROM table_status GROUP BY status").fetchall():
+            if status in result['summary']:
+                result['summary'][status] = count
+            result['summary']['total'] += count
+
+        # Tabelas em execução
+        result['running_tables'] = [
+            {'source': r[0], 'dest': r[1], 'started_at': r[2]}
+            for r in conn.execute("""
+                SELECT source_table, dest_table, started_at
+                FROM table_status WHERE status = 'running'
+                ORDER BY started_at
+            """).fetchall()
+        ]
+
+        # Tabelas com falha
+        result['recent_failed'] = [
+            {'source': r[0], 'error': r[1]}
+            for r in conn.execute("""
+                SELECT source_table, error_msg
+                FROM table_status WHERE status = 'failed'
+                ORDER BY source_table LIMIT 10
+            """).fetchall()
+        ]
+        conn.close()
+    except Exception:
+        pass
+    return result
 
 
 # ─── exibição multi-tabela ───────────────────────────────────────────────────
@@ -232,9 +312,13 @@ def _build_multi_table(dbs: list[Path]) -> Table:
     return tbl
 
 
-def display_live_all(interval: float = 2.0):
-    """Painel ao vivo com todas as migrações detectadas."""
-    dbs = _discover_dbs()
+def display_live_all(interval: float = 2.0, only: set = None):
+    """Painel ao vivo com todas as migrações detectadas.
+    Se `only` for fornecido, exibe apenas os DBs cujo nome estiver no conjunto.
+    """
+    def _get(o): return _filter_dbs(_discover_dbs(), o) if o else _discover_dbs()
+
+    dbs = _get(only)
     if not dbs:
         print('Nenhum arquivo migration_state_*.db encontrado.')
         print('Inicie a migracao com: python migrator.py --table NOME_TABELA')
@@ -247,7 +331,7 @@ def display_live_all(interval: float = 2.0):
             try:
                 while True:
                     time.sleep(interval)
-                    dbs = _discover_dbs()
+                    dbs = _get(only)
                     live.update(_build_multi_table(dbs))
             except KeyboardInterrupt:
                 pass
@@ -255,7 +339,7 @@ def display_live_all(interval: float = 2.0):
         try:
             while True:
                 os.system('cls' if os.name == 'nt' else 'clear')
-                dbs = _discover_dbs()
+                dbs = _get(only)
                 print('=' * 80)
                 print('  MONITOR MIGRACOES - TODAS AS TABELAS')
                 print(f'  {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
@@ -476,6 +560,180 @@ class MigrationMonitor:
         print(f'Estado resetado: {self.state_db}')
 
 
+# ─── small-tables monitor ────────────────────────────────────────────────────
+
+def _build_small_tables_panel(master_db: Path, interval: float) -> object:
+    """Monta painel Rich para o modo --small-tables."""
+    from rich.progress import BarColumn, Progress
+
+    state = _read_master_state(master_db)
+    s     = state['summary']
+    total = s['total']
+    done  = s['completed']
+    fail  = s['failed']
+    pend  = s['pending'] + s['running']
+
+    now_str = datetime.now().strftime('%H:%M:%S')
+
+    if not HAS_RICH:
+        return None
+
+    from rich.console import Group
+
+    # ── Cabeçalho: barra de progresso global ─────────────────
+    pct = (done / total * 100) if total else 0
+    bar = _bar(pct, 40)
+    header_lines = [
+        f'[bold cyan]Small Tables Migration[/bold cyan]  |  {now_str}  |  refresh {interval}s',
+        '',
+        f'  [{bar}]  [bold]{pct:.1f}%[/bold]  ({done}/{total} tabelas)',
+        f'  [green]Concluídas: {done}[/green]  '
+        f'[yellow]Pendentes: {pend}[/yellow]  '
+        f'[red]Falhas: {fail}[/red]',
+    ]
+
+    from rich.panel import Panel as RPanel
+    from rich.table import Table as RTable
+
+    # ── Tabela de workers ativos ──────────────────────────────
+    worker_tbl = RTable(
+        header_style='bold cyan',
+        box=box.SIMPLE,
+        expand=True,
+        show_header=True,
+    )
+    worker_tbl.add_column('Tabela (worker ativo)', style='bold', min_width=28)
+    worker_tbl.add_column('Status',    justify='center', min_width=12)
+    worker_tbl.add_column('Progresso', min_width=30)
+    worker_tbl.add_column('Linhas',    justify='right', min_width=22)
+    worker_tbl.add_column('Vel (l/s)', justify='right', min_width=10)
+    worker_tbl.add_column('ETA',       justify='right', min_width=10)
+
+    running = state['running_tables']
+    if running:
+        for rt in running:
+            dest     = rt['dest']
+            db_path  = master_db.parent / f'migration_state_{dest}.db'
+            p        = _read_progress(db_path)
+            if not p:
+                worker_tbl.add_row(
+                    f'{rt["source"]} → {dest}',
+                    Text('INICIANDO', style='dim'),
+                    _bar(0) + '   0.00%',
+                    '-', '-', '-',
+                )
+                continue
+            status = p.get('status', 'running')
+            color  = _status_color(status)
+            m = p.get('rows_migrated', 0)
+            t = p.get('total_rows', 0)
+            pct_w = _calc_pct(p)
+            worker_tbl.add_row(
+                f'{rt["source"]} → {dest}',
+                Text(status.upper(), style=f'bold {color}'),
+                Text(f'{_bar(pct_w, 20)}  {pct_w:5.1f}%', style=color),
+                f'{m:>10,} / {t:>10,}',
+                f'{p.get("speed_rows_per_sec", 0):>8,.0f}',
+                _fd(p.get('eta_seconds', 0)),
+            )
+    else:
+        if total == 0:
+            worker_tbl.add_row(
+                '[dim]Aguardando início...[/dim]', '', '', '', '', '')
+        elif done == total:
+            worker_tbl.add_row(
+                '[green bold]Migração concluída![/green bold]', '', '', '', '', '')
+        else:
+            worker_tbl.add_row(
+                '[dim]Nenhum worker ativo no momento[/dim]', '', '', '', '', '')
+
+    # ── Falhas (se houver) ────────────────────────────────────
+    fail_lines = []
+    if state['recent_failed']:
+        fail_lines.append('[red bold]Tabelas com falha:[/red bold]')
+        for f in state['recent_failed']:
+            err = (f.get('error') or '')[:80]
+            fail_lines.append(f'  [red]✗ {f["source"]}[/red] — {err}')
+
+    body = '\n'.join(header_lines)
+    if fail_lines:
+        body += '\n\n' + '\n'.join(fail_lines)
+
+    return RPanel(
+        Group(body, worker_tbl),  # type: ignore[arg-type]
+        title='Monitor — Tabelas Pequenas',
+        border_style='cyan',
+    )
+
+
+def _build_small_tables_plain(master_db: Path):
+    """Exibe modo texto simples para --small-tables (sem rich)."""
+    state = _read_master_state(master_db)
+    s     = state['summary']
+    total = s['total']
+    done  = s['completed']
+    fail  = s['failed']
+
+    pct = (done / total * 100) if total else 0
+    print('=' * 65)
+    print('  MONITOR — TABELAS PEQUENAS')
+    print(f'  {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+    print('=' * 65)
+    print(f'  [{_bar(pct, 30)}] {pct:.1f}%')
+    print(f'  Concluídas: {done} / {total} | Falhas: {fail} | Pendentes: {s["pending"]}')
+
+    if state['running_tables']:
+        print(f'\n  Workers ativos ({len(state["running_tables"])}):')
+        for rt in state['running_tables']:
+            dest    = rt['dest']
+            db_path = master_db.parent / f'migration_state_{dest}.db'
+            p       = _read_progress(db_path)
+            if p:
+                m   = p.get('rows_migrated', 0)
+                t   = p.get('total_rows', 0)
+                pct_w = _calc_pct(p)
+                print(f'    {dest:<30} [{_bar(pct_w, 15)}] {pct_w:5.1f}%  '
+                      f'{m:>8,}/{t:>8,}')
+            else:
+                print(f'    {dest:<30} INICIANDO')
+
+    if state['recent_failed']:
+        print(f'\n  Falhas:')
+        for f in state['recent_failed']:
+            print(f'    ✗ {f["source"]}: {(f.get("error") or "")[:60]}')
+
+
+def display_small_tables_live(master_db: Path, interval: float = 2.0):
+    """Painel ao vivo para a migração das tabelas pequenas."""
+    if not master_db.exists():
+        print(f'Master state não encontrado: {master_db}')
+        print('Inicie a migração com: python migrator_smalltables.py --small-tables')
+        return
+
+    if HAS_RICH:
+        from rich.console import Console as RConsole
+        from rich.live import Live
+        console = RConsole()
+        panel = _build_small_tables_panel(master_db, interval)
+        with Live(panel, console=console, refresh_per_second=1/interval) as live:
+            try:
+                while True:
+                    time.sleep(interval)
+                    live.update(_build_small_tables_panel(master_db, interval))
+            except KeyboardInterrupt:
+                pass
+    else:
+        try:
+            while True:
+                import os as _os
+                _os.system('cls' if _os.name == 'nt' else 'clear')
+                _build_small_tables_plain(master_db)
+                print('\nCtrl+C para sair')
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            pass
+
+
 # ─── show_constraints ────────────────────────────────────────────────────────
 
 def show_constraints(console=None):
@@ -502,9 +760,11 @@ def show_constraints(console=None):
 
 # ─── show_summary_all ────────────────────────────────────────────────────────
 
-def show_summary_all(console=None):
-    """Resumo tabular de todas as migrações encontradas."""
-    dbs = _discover_dbs()
+def show_summary_all(console=None, only: set = None):
+    """Resumo tabular de todas as migrações encontradas.
+    Se `only` for fornecido, filtra apenas os DBs cujo nome estiver no conjunto.
+    """
+    dbs = _filter_dbs(_discover_dbs(), only) if only else _discover_dbs()
     if not dbs:
         print('Nenhum arquivo migration_state_*.db encontrado.')
         return
@@ -568,8 +828,11 @@ def main():
         epilog="""
 Exemplos:
   python monitor.py                                  # painel de todas as migracoes
+  python monitor.py --big-tables                     # painel só das 10 tabelas grandes
+  python monitor.py --small-tables                   # painel das 901 tabelas pequenas
   python monitor.py --state-db migration_state_operacao_credito.db  # detalhe unico
   python monitor.py --summary                        # resumo de todas
+  python monitor.py --summary --big-tables           # resumo só das 10 grandes
   python monitor.py --history 50 --state-db X.db    # historico de batches
   python monitor.py --constraints                    # estado das constraints
   python monitor.py -i 5                             # refresh a cada 5s
@@ -586,11 +849,31 @@ Exemplos:
                     help='Exibe estado de todas as constraints')
     ap.add_argument('--reset',      action='store_true',
                     help='Reseta estado do banco (requer --state-db)')
+    ap.add_argument('--big-tables', action='store_true',
+                    help='Filtra exibição para as 10 tabelas grandes '
+                         '(migradas pelo migrator.py). '
+                         'Combinável com --summary.')
+    ap.add_argument('--small-tables', action='store_true',
+                    help='Painel para migração paralela das tabelas pequenas. '
+                         'Lê migration_state_smalltables_master.db')
+    ap.add_argument('--master-db', type=str, default=None,
+                    help='Caminho do master state DB para --small-tables '
+                         '(padrão: migration_state_smalltables_master.db)')
     ap.add_argument('-i', '--interval', type=float, default=2.0,
                     help='Intervalo de refresh em segundos (padrao: 2)')
     args = ap.parse_args()
 
     console = Console() if HAS_RICH else None
+    only_big = BIG_TABLES if args.big_tables else None
+
+    # ── Modo tabelas pequenas ────────────────────────────────
+    if args.small_tables:
+        master_db_path = Path(
+            args.master_db if args.master_db
+            else BASE_DIR / 'migration_state_smalltables_master.db'
+        )
+        display_small_tables_live(master_db_path, args.interval)
+        return
 
     # Operações que exigem --state-db
     if args.json_out or args.history or args.reset:
@@ -616,7 +899,7 @@ Exemplos:
         if args.state_db:
             MigrationMonitor(args.state_db).show_summary()
         else:
-            show_summary_all(console)
+            show_summary_all(console, only=only_big)
         return
 
     # Modo ao vivo
@@ -624,8 +907,8 @@ Exemplos:
         # Detalhe de uma tabela específica
         MigrationMonitor(args.state_db).display_live(args.interval)
     else:
-        # Painel multi-tabela (comportamento padrão)
-        display_live_all(args.interval)
+        # Painel multi-tabela (comportamento padrão, com filtro opcional)
+        display_live_all(args.interval, only=only_big)
 
 
 if __name__ == '__main__':

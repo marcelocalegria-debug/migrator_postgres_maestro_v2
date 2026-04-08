@@ -1,3 +1,15 @@
+(.venv) postgres@postgres-server-sp2:/migracao_firebird$ ls -alrt /databases/scci.gdb
+total 21231600
+-rw-r--r--  1 root root          13 Mar 31 10:40 senhabd-firebird
+drwxr-xr-x 21 root root        4096 Apr  4 13:41 ..
+drwxr-xr-x  2 root root        4096 Apr  7 18:01 .
+-rw-r-----  1 root root 21741142016 Apr  8 13:50 scci.gdb
+
+Bstikqxd_yat
+
+
+
+
 sudo su - postgres
 
 cd /migracao_firebird
@@ -24,15 +36,68 @@ drwxr-xr-x  2 root root        4096 Apr  7 18:01 .
 
 testa a conectividade
 
-# /opt/firebird/bin/isql
+#  root
+
+/opt/firebird/bin/isql
 CONNECT '/databases/scci.gdb' USER 'SYSDBA' PASSWORD 'Bstikqxd_yat';
-SHOW TABLES;
+
+SELECT COUNT(RDB$RELATION_NAME) 
+FROM RDB$RELATIONS 
+WHERE RDB$VIEW_BLR IS NULL 
+AND RDB$SYSTEM_FLAG = 0;
+
+-- postgres
+
+sudo su - postgres
+psql
+
+\c c6_producao
+
+SELECT count(*) 
+FROM information_schema.tables 
+WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+AND table_type = 'BASE TABLE';
+
 EXIT;
 
+
+-- cria.sql
 
 psql -h localhost -p 5432 -U "c6_producao_user" -d c6_producao -W < /migracao_firebird/cria976_pg.sql  | tee -a /migracao_firebird/imp_cria_976_7abril.log
 
 5tEkZZwRydTUXarJ
+
+-- ajuste das 3 faltando no cria.sql
+
+-- public.arq_co_aplic definition
+-- Drop table
+-- DROP TABLE public.arq_co_aplic;
+
+CREATE TABLE public.arq_co_aplic (
+	co_aplic int4 NOT NULL,
+	CONSTRAINT arq_co_aplic_pkey PRIMARY KEY (co_aplic)
+);
+
+-- public.ordem_pretendente definition
+-- Drop table
+-- DROP TABLE public.ordem_pretendente;
+
+CREATE TABLE public.ordem_pretendente (
+	nu_pretendente varchar(9) DEFAULT ''::character varying NOT NULL,
+	nu_ordem int4 DEFAULT 0 NULL,
+	CONSTRAINT ordem_pretendente_pkey PRIMARY KEY (nu_pretendente)
+);
+
+-- public.tmp_exc_log definition
+-- Drop table
+-- DROP TABLE public.tmp_exc_log;
+
+CREATE TABLE public.tmp_exc_log (
+	co_log int4 NOT NULL,
+	CONSTRAINT tmp_exc_log_pkey PRIMARY KEY (co_log)
+);
+
+
 
 
 nohup ./chama_migrator.sh CONTROLEVERSAO &
@@ -48,6 +113,31 @@ nohup ./chama_migrator.sh PESSOA_PRETENDENTE &
 nohup ./chama_migrator_doc_oper.sh   &
 
 
+-- SMALL TABLES
+
+  # Dar permissão (uma vez)
+  chmod +x migrator_smalltables.sh
+
+  # Rodar em nohup
+  nohup ./migrator_smalltables.sh > nohup_smalltables.out 2>&1 &
+
+  nohup ./migrator_smalltables.sh > nohup_smalltables_3faltando.out 2>&1 &
+
+
+
+  # Acompanhar log
+  tail -f nohup_smalltables.out
+
+  # Monitor em outra janela
+  python monitor.py --small-tables
+
+  O "$@" passa qualquer argumento extra diretamente ao Python, então funciona:
+
+  nohup ./migrator_smalltables.sh --dry-run > nohup_smalltables.out 2>&1 &
+  nohup ./migrator_smalltables.sh --reset   > nohup_smalltables.out 2>&1 &
+  nohup ./migrator_smalltables.sh --workers 6 > nohup_smalltables.out 2>&1 &
+
+
 
 ### MONITOR.py
 
@@ -60,6 +150,35 @@ export PYTHONIOENCODING=utf-8
 source .venv/bin/activate
 python monitor.py
 
+
+
+    python monitor.py                          # painel com todas as migrações detectadas
+    python monitor.py --state-db X.db          # detalhe de uma tabela específica
+
+                         Comando                           │                    O que mostra                    │
+  ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+  │ python monitor.py                                          │ Tudo: todas as tabelas + as 5 linhas do doc_oper   │
+  │                                                            │ (total + t0…t3)                                    │
+  ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+  │ python monitor.py --big-tables                             │ Só as 10 tabelas grandes, incluindo as threads do  │
+  │                                                            │ doc_oper (total + t0…t3)                           │
+  ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+  │ python monitor.py --state-db                               │ Só o painel detalhado do total agregado            │
+  │ migration_state_documento_operacao.db                      │                                                    │
+  ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+  │ python monitor.py --state-db                               │ Só o detalhe da thread 0                           │
+  │ migration_state_documento_operacao_t0.db                   │                                                    │
+  └────────────────────────────────────────────────────────────┴────────────────────────────────────────────────────┘
+
+    python monitor.py --summary                # resumo tabular de todas as tabelas
+    python monitor.py --history 50             # histórico de batches (requer --state-db)
+    python monitor.py --json                   # JSON (requer --state-db)
+    python monitor.py --constraints            # ver constraints de todas as tabelas
+    python monitor.py -i 5                     # refresh a cada 5s (padrão: 2s)
+
+    python monitor.py --big-tables              # painel ao vivo das 10 tabelas grandes
+    python monitor.py --big-tables -i 5        # refresh a cada 5s
+    python monitor.py --big-tables --summary   # resumo tabular das 10 grandes
 
 ### APOS A CARGA
 
