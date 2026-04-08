@@ -226,8 +226,8 @@ def _pg_get_fks(conn, schema: str, table: str) -> Set[Tuple[str, str, str]]:
         FROM pg_constraint con
         JOIN pg_class cls1 ON con.conrelid = cls1.oid
         JOIN pg_namespace nsp ON cls1.relnamespace = nsp.oid
-        JOIN pg_class cls2 ON con.confrelid = cls2.oid,
-            unnest(con.conkey, con.confkey) AS u(local_att, ref_att)
+        JOIN pg_class cls2 ON con.confrelid = cls2.oid
+        CROSS JOIN LATERAL unnest(con.conkey, con.confkey) AS u(local_att, ref_att)
         JOIN pg_attribute att1 ON att1.attrelid = con.conrelid AND att1.attnum = u.local_att
         JOIN pg_attribute att2 ON att2.attrelid = con.confrelid AND att2.attnum = u.ref_att
         WHERE nsp.nspname = %s

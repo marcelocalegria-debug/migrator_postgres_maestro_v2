@@ -281,21 +281,33 @@ nohup ./chama_migrator_doc_oper.sh   &
   CREATE INDEX IF NOT EXISTS idx_log_eventos_co_aplic_co_detalhe_dt_data_detalhe
       ON public.log_eventos (co_aplic, co_detalhe, dt_data_detalhe);
 
-  Para verificar a ordem original das colunas no Firebird antes de aplicar:
 
-  SELECT
-      TRIM(i.RDB$INDEX_NAME) as idx_name,
-      TRIM(sg.RDB$FIELD_NAME) as col_name,
-      sg.RDB$FIELD_POSITION as pos
-  FROM RDB$INDICES i
-  JOIN RDB$INDEX_SEGMENTS sg ON i.RDB$INDEX_NAME = sg.RDB$INDEX_NAME
-  WHERE TRIM(i.RDB$RELATION_NAME) = 'LOG_EVENTOS'
-    AND i.RDB$SYSTEM_FLAG = 0
-    AND NOT EXISTS (
-        SELECT 1 FROM RDB$RELATION_CONSTRAINTS rc
-        WHERE rc.RDB$INDEX_NAME = i.RDB$INDEX_NAME
-    )
-  ORDER BY i.RDB$INDEX_NAME, sg.RDB$FIELD_POSITION;
+  ---
+  movimentos_passivo — IDX só no PG
+
+  O FB tem co_contrato e nu_cercefhab (ambos existem também no PG, então se cancelam). Os 3 extras (dt_geracao_arquivo,
+  no_arquivo_gerado, dt_geracao_arquivo,nu_cercefhab) existem só no PG — foram criados diretamente lá, provavelmente por
+   um DBA para tuning de performance. Não é um problema, são índices a mais.
+
+  ---
+  status_documento_operacao — IDX só no FB
+
+  O índice (nu_documento, nu_sequencial) existe no FB mas não foi migrado para PG. Criar se necessário:
+
+  CREATE INDEX idx_status_documento_operacao_nu_doc_seq
+      ON public.status_documento_operacao (nu_documento, nu_sequencial);
+
+  ---
+  tab_cartorio — IDX só no FB
+
+  O PG já tem tab_cartoriox01/02/03 (que batem com o FB), mas o índice nu_municipio não foi migrado:
+
+  CREATE INDEX idx_tab_cartorio_nu_municipio
+      ON public.tab_cartorio (nu_municipio);
+
+  ---
+  Em resumo: 2 índices realmente faltando no PG, e 1 tabela com índices extras criados no PG após a migração. Tudo
+  esperado, nada crítico
 
 
 
