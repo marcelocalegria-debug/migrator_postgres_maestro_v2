@@ -67,11 +67,13 @@ try:
     from rich.text import Text
     from rich import box
     from rich.panel import Panel
+    from rich.markup import escape as rich_escape
     HAS_RICH = True
     console = Console()
 except ImportError:
     HAS_RICH = False
     console = None
+    def rich_escape(s): return s
 
 
 # ─── Conexões ─────────────────────────────────────────────────────────────────
@@ -631,9 +633,9 @@ def _print_summary_rich(results: List[dict], only_fb: List[str], only_pg: List[s
             if not r['uniq_ok']:   status.append('[yellow]UNIQ[/]')
             if not r['check_ok']:  status.append('[yellow]CHECK[/]')
             
-            console.print(f'\n[bold]{r["table"]}[/] - {" ".join(status)}')
+            console.print(f'\n[bold]{rich_escape(r["table"])}[/] - {" ".join(status)}')
             for issue in r['issues']:
-                console.print(f'  [dim]• {issue}[/]')
+                console.print(f'  [dim]• {rich_escape(issue)}[/]')
         
         if len(issues) > 50:
             console.print(f'\n[dim]... e mais {len(issues)-50} tabelas com diferenças[/]')

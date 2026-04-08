@@ -221,6 +221,7 @@ HTML_TEMPLATE = """
         .issue-item.fk {{ background: #fef3c7; border-color: #f59e0b; }}
         .issue-item.idx {{ background: #dbeafe; border-color: #3b82f6; }}
         .issue-item.uniq {{ background: #dbeafe; border-color: #3b82f6; }}
+        .issue-item.check {{ background: #f3e8ff; border-color: #9333ea; }}
         
         .no-issues {{
             text-align: center;
@@ -357,6 +358,7 @@ def generate_html_report(results, only_fb, only_pg, output_path):
                 <div class="filter-tab" data-filter="fk">FK</div>
                 <div class="filter-tab" data-filter="idx">INDEX</div>
                 <div class="filter-tab" data-filter="uniq">UNIQUE</div>
+                <div class="filter-tab" data-filter="check">CHECK</div>
             </div>
         '''
         
