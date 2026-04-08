@@ -68,6 +68,15 @@ def _status_color(status: str) -> str:
     return STATUS_COLOR.get(status, 'white')
 
 
+def _calc_pct(p: dict) -> float:
+    """Percentual de progresso; força 100% quando status é completed/loaded."""
+    if p.get('status', '') in ('completed', 'loaded'):
+        return 100.0
+    m = p.get('rows_migrated', 0)
+    t = p.get('total_rows', 0)
+    return (m / t * 100) if t else 0
+
+
 # ─── leitura de estado ───────────────────────────────────────────────────────
 
 def _read_progress(db_path: Path, retries: int = 3) -> dict:
@@ -167,7 +176,7 @@ def _build_multi_table(dbs: list[Path]) -> Table:
 
         m   = p.get('rows_migrated', 0)
         t   = p.get('total_rows', 0)
-        pct = (m / t * 100) if t else 0
+        pct = _calc_pct(p)
         totals_m += m
         totals_t += t
 
@@ -259,7 +268,7 @@ def display_live_all(interval: float = 2.0):
                         continue
                     m   = p.get('rows_migrated', 0)
                     t   = p.get('total_rows', 0)
-                    pct = (m / t * 100) if t else 0
+                    pct = _calc_pct(p)
                     print(f'  {p.get("dest_table","?"):<20} '
                           f'{p.get("status","?").upper():<12} '
                           f'[{_bar(pct, 15)}] {pct:5.2f}%  '
@@ -304,7 +313,7 @@ class MigrationMonitor:
 
             m   = p.get('rows_migrated', 0)
             t   = p.get('total_rows', 0)
-            pct = (m / t * 100) if t else 0
+            pct = _calc_pct(p)
             spd = p.get('speed_rows_per_sec', 0) or 0
             eta = p.get('eta_seconds', 0) or 0
             elp = p.get('elapsed_seconds', 0) or 0
@@ -365,7 +374,7 @@ class MigrationMonitor:
 
                 m   = p.get('rows_migrated', 0)
                 t   = p.get('total_rows', 0)
-                pct = (m / t * 100) if t else 0
+                pct = _calc_pct(p)
 
                 print('=' * 65)
                 print('  MONITOR MIGRACAO FIREBIRD -> POSTGRESQL')
@@ -397,7 +406,7 @@ class MigrationMonitor:
 
         m   = p.get('rows_migrated', 0)
         t   = p.get('total_rows', 0)
-        pct = (m / t * 100) if t else 0
+        pct = _calc_pct(p)
 
         if HAS_RICH:
             tbl = Table(title='Resumo', header_style='bold cyan')
@@ -520,7 +529,7 @@ def show_summary_all(console=None):
                 continue
             m   = p.get('rows_migrated', 0)
             t   = p.get('total_rows', 0)
-            pct = (m / t * 100) if t else 0
+            pct = _calc_pct(p)
             status = p.get('status', 'idle')
             color  = _status_color(status)
             tbl.add_row(
@@ -544,7 +553,7 @@ def show_summary_all(console=None):
                 continue
             m   = p.get('rows_migrated', 0)
             t   = p.get('total_rows', 0)
-            pct = (m / t * 100) if t else 0
+            pct = _calc_pct(p)
             print(f'  {p.get("dest_table","?"):<22} '
                   f'{p.get("status","?").upper():<12} '
                   f'{pct:6.2f}%  {m:>10,}/{t:>10,}')

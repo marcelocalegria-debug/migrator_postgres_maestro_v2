@@ -7,7 +7,32 @@ export PYTHONIOENCODING=utf-8
 source .venv/bin/activate
 
 
+### SERVIDOR EQUINIX FIREBIRD  - 10.3.98.143
 
+-- COMO ROOT  - tá na 976   iechiev9ohH?
+
+
+(.venv) postgres@postgres-server-sp2:/migracao_firebird$ cd /databases
+(.venv) postgres@postgres-server-sp2:/databases$ ls -alrt
+total 21231600
+-rw-r--r--  1 root root          13 Mar 31 10:40 senhabd-firebird
+drwxr-xr-x 21 root root        4096 Apr  4 13:41 ..
+drwxr-xr-x  2 root root        4096 Apr  7 18:01 .
+-rw-r-----  1 root root 21741142016 Apr  7 18:09 scci.gdb
+(.venv) postgres@postgres-server-sp2:/databases$
+
+
+testa a conectividade
+
+# /opt/firebird/bin/isql
+CONNECT '/databases/scci.gdb' USER 'SYSDBA' PASSWORD 'Bstikqxd_yat';
+SHOW TABLES;
+EXIT;
+
+
+psql -h localhost -p 5432 -U "c6_producao_user" -d c6_producao -W < /migracao_firebird/cria976_pg.sql  | tee -a /migracao_firebird/imp_cria_976_7abril.log
+
+5tEkZZwRydTUXarJ
 
 
 nohup ./chama_migrator.sh CONTROLEVERSAO &
@@ -19,12 +44,74 @@ nohup ./chama_migrator.sh OPERACAO_CREDITO &
 nohup ./chama_migrator.sh NMOV &
 nohup ./chama_migrator.sh OCORRENCIA_SISAT &
 nohup ./chama_migrator.sh PESSOA_PRETENDENTE &
-nohup ./chama_migrator.sh DOCUMENTO_OPERACAO &
+
+nohup ./chama_migrator_doc_oper.sh   &
 
 
-APOS A CARGA
 
-(Migracao_Fire2pg) PS C:\Python\Migracao_Fire2pg_c6_prod>
+### MONITOR.py
+
+sudo su - postgres
+
+cd /migracao_firebird
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+export PYTHONIOENCODING=utf-8
+source .venv/bin/activate
+python monitor.py
+
+
+### APOS A CARGA
+
+#### HABILITA CONSTRAINTS
+
+(.venv) postgres@postgres-server-sp2:/migracao_firebird/logs$ cd ..
+-rw-rw-r-- 1 postgres postgres 22228 Apr  3 14:10 enable_constraints.py
+(.venv) postgres@postgres-server-sp2:/migracao_firebird$  python enable_constraints.py
+20:37:26 [INFO   ] ======================================================================
+20:37:26 [INFO   ]   ENABLE CONSTRAINTS — EXECUÇÃO
+20:37:26 [INFO   ]   Tabelas: 10
+20:37:26 [INFO   ]   Banco  : c6_producao @ localhost:5432
+20:37:26 [INFO   ]   Log    : enable_constraints_20260407_203726.log
+20:37:26 [INFO   ] ======================================================================
+20:37:26 [INFO   ]
+20:37:26 [INFO   ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+20:37:26 [INFO   ]   Tabela: parcelasctb  (enable_constraints_parcelasctb.sql)
+20:37:26 [INFO   ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+#### CHECKSUM 
+
+(.venv) postgres@postgres-server-sp2:/migracao_firebird$ python PosMigracao_comparaChecksum_bytea.py
+
+╭────────────────────────────────────────────────────────╮
+│                                                        │
+│    Verificação Pós-Migração                            │
+│    Checksum MD5 — BLOB Firebird vs BYTEA PostgreSQL    │
+│                                                        │
+╰────────────────────────────────────────────────────────╯
+Início: 07/04/2026 20:42:40
+
+Analisando controleversao... colunas: ['dado', 'te_observacao_versao', 'te_imagem_reduzida']
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
  $env:PGCLIENTENCODING="latin1"
@@ -40,6 +127,25 @@ APOS A CARGA
  psql -p 5435 c6_producao  -U postgres -f enable_constraints_operacao_credito.sql
  psql -p 5435 c6_producao  -U postgres -f enable_constraints_parcelasctb.sql
  psql -p 5435 c6_producao  -U postgres -f enable_constraints_pessoa_pretendente.sql
+
+
+#### NAO PRECISA - python migrator_parallel_doc_oper.py --threads 4
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 -- trobleshooting OOM Killer
