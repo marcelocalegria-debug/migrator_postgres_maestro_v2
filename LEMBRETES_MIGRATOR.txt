@@ -1,3 +1,17 @@
+10 maiores tabelas 
+
+CONTROLEVERSAO
+HISTORICO_OPERACAO
+OCORRENCIA
+PARCELASCTB
+OPERACAO_CREDITO
+NMOV
+OCORRENCIA_SISAT
+PESSOA_PRETENDENTE
+DOCUMENTO_OPERACAO
+LOG_EVENTOS
+
+
 (.venv) postgres@postgres-server-sp2:/migracao_firebird$ ls -alrt /databases/scci.gdb
 total 21231600
 -rw-r--r--  1 root root          13 Mar 31 10:40 senhabd-firebird
@@ -6,8 +20,6 @@ drwxr-xr-x  2 root root        4096 Apr  7 18:01 .
 -rw-r-----  1 root root 21741142016 Apr  8 13:50 scci.gdb
 
 Bstikqxd_yat
-
-
 
 
 sudo su - postgres
