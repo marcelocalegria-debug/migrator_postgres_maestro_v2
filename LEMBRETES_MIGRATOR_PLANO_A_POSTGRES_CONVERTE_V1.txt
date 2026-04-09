@@ -249,19 +249,22 @@ nohup ./chama_migrator_doc_oper.sh   &
 
 
 ----------------------------------------------------------------------------------------------------------
-8- Checksum em paralelo das 10 maiores - inicio 20:28
+8- Checksum em paralelo das 10 maiores - inicio 20:51
 ----------------------------------------------------------------------------------------------------------
 
 (.venv) postgres@postgres-server-sp2:/migracao_firebird$ 
 
-  Fluxo paralelo:
+  Fluxo paralelo: NAO FUNCIONOU, ESGOTOU 100% DA MEMORIA DO SERVIDOR
    1. Dispara 10 threads simultaneamente, cada uma com conexões FB+PG próprias
    2. Conforme terminam, imprime ✓ tabela  X.Xs  (N/10) em tempo real
    3. Após todas completarem, exibe os detalhes de cada tabela na ordem original
    4. Exibe o resumo consolidado final
 
-  # Todas as 10 em paralelo (padrão)
-  python PosMigracao_comparaChecksum_bytea.py
+  # Todas as 10 em paralelo (padrão) - NAO FUNCIONOU, ESGOTOU 100% DA MEMORIA DO SERVIDOR
+  #####  NAO FUNCIONOU, ESGOTOU 100% DA MEMORIA DO SERVIDOR  ###python PosMigracao_comparaChecksum_bytea.py
+  
+  -- inicio 20:51 (com 2 em paralelo)
+  python PosMigracao_comparaChecksum_bytea.py --workers 2
 
 
             ############### outras formas de chamar caso necessario
