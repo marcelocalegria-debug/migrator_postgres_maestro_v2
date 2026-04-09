@@ -5,7 +5,6 @@ build/
 dist/
 wheels/
 *.egg-info
-*.sql
 *.log
 config.yaml
 testes/
