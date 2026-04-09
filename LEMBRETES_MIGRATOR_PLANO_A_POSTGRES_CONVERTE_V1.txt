@@ -297,6 +297,20 @@ nohup ./chama_migrator_doc_oper.sh   &
 
       tabelas_10_so_constraints_fk.sql
 
+----------------------------------------------------------------------------------------------------------
+9.1 - Constraints de tudo faltando 
+----------------------------------------------------------------------------------------------------------
+
+  (.venv) postgres@postgres-server-sp2:/migracao_firebird$ psql
+   Pager usage is off.
+   psql (18.0 (Debian 18.0-1.pgdg13+3))
+   Type "help" for help.
+
+   postgres=# \c c6_producao
+   You are now connected to database "c6_producao" as user "postgres".
+
+
+   03_create_foreign_key_tudo.sql
  
 ----------------------------------------------------------------------------------------------------------
 10 - Comparar estrutura e gera relatorio final HTML - inicio  08:28 as 08:31
@@ -314,10 +328,10 @@ nohup ./chama_migrator_doc_oper.sh   &
 
 
 ----------------------------------------------------------------------------------------------------------
-11 - GERAR O BACKUP PARA SER LEVADO PARA O EC2 - backup iniciado as 08:31 as 08:47
+11 - GERAR O BACKUP PARA SER LEVADO PARA O EC2 - backup iniciado as 10:31 as 10:43
 ----------------------------------------------------------------------------------------------------------
 
-bash# EXPORT (com paralelizacao) - gera um diretorio
+bash# EXPORT (com paralelizacao) - gera um diretorio  
 
 
 mkdir -p /migracao_firebird/backup/c6_producao_dir
