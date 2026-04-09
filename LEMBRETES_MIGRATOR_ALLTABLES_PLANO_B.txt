@@ -1,16 +1,6 @@
-10 maiores tabelas 
-
-CONTROLEVERSAO
-HISTORICO_OPERACAO
-OCORRENCIA
-PARCELASCTB
-OPERACAO_CREDITO
-NMOV
-OCORRENCIA_SISAT
-PESSOA_PRETENDENTE
-DOCUMENTO_OPERACAO
-LOG_EVENTOS
-
+##########################################################################################################
+# MIGRACAO C6 - BIGTABLES 
+##########################################################################################################
 
 (.venv) postgres@postgres-server-sp2:/migracao_firebird$ ls -alrt /databases/scci.gdb
 total 21231600
@@ -18,7 +8,6 @@ total 21231600
 drwxr-xr-x 21 root root        4096 Apr  4 13:41 ..
 drwxr-xr-x  2 root root        4096 Apr  7 18:01 .
 -rw-r-----  1 root root 21741142016 Apr  8 13:50 scci.gdb
-
 Bstikqxd_yat
 
 
@@ -72,14 +61,31 @@ AND table_type = 'BASE TABLE';
 
 EXIT;
 
+##########################################################################################################
+## INICIO - 18:40
+##########################################################################################################
 
+----------------------------------------------------------------------------------------------------------
+0 -  Apaga *.log *.md para nao confundir dos testes anteriores e do ./logs
+----------------------------------------------------------------------------------------------------------
+
+----------------------------------------------------------------------------------------------------------
+1- Criar o database zerado c6_producao usando o CRIACAO_NOVO_BANCO_POSTGRES_C6_PROD_EC2_V2.SQL
+----------------------------------------------------------------------------------------------------------
+
+----------------------------------------------------------------------------------------------------------
+2- Criar o esquema c6_producao usando o cria976_pg.sql
+----------------------------------------------------------------------------------------------------------
 -- cria.sql
 
 psql -h localhost -p 5432 -U "c6_producao_user" -d c6_producao -W < /migracao_firebird/cria976_pg.sql  | tee -a /migracao_firebird/imp_cria_976_7abril.log
 
 5tEkZZwRydTUXarJ
 
--- ajuste das 3 faltando no cria.sql
+
+----------------------------------------------------------------------------------------------------------
+3- Ajuste das 3 tabelas faltando no cria.sql 
+----------------------------------------------------------------------------------------------------------
 
 -- public.arq_co_aplic definition
 -- Drop table
@@ -110,7 +116,65 @@ CREATE TABLE public.tmp_exc_log (
 );
 
 
+----------------------------------------------------------------------------------------------------------
+4- Liga o monitor - 19:10
+----------------------------------------------------------------------------------------------------------
 
+
+-- liga o monitory.py em outra sessao
+sudo su - postgres
+
+cd /migracao_firebird
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+export PYTHONIOENCODING=utf-8
+source .venv/bin/activate
+# Monitorar em outra janela
+python monitor.py --big-tables
+
+################# SO DOCUMENTACAO - NAO USAR 
+
+                        python monitor.py                          # painel com todas as migrações detectadas
+                        python monitor.py --state-db X.db          # detalhe de uma tabela específica
+
+                                             Comando                           │                    O que mostra                    │
+                     ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+                     │ python monitor.py                                          │ Tudo: todas as tabelas + as 5 linhas do doc_oper   │
+                     │                                                            │ (total + t0…t3)                                    │
+                     ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+                     │ python monitor.py --big-tables                             │ Só as 10 tabelas grandes, incluindo as threads do  │
+                     │                                                            │ doc_oper (total + t0…t3)                           │
+                     ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+                     │ python monitor.py --state-db                               │ Só o painel detalhado do total agregado            │
+                     │ migration_state_documento_operacao.db                      │                                                    │
+                     ├────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+                     │ python monitor.py --state-db                               │ Só o detalhe da thread 0                           │
+                     │ migration_state_documento_operacao_t0.db                   │                                                    │
+                     └────────────────────────────────────────────────────────────┴────────────────────────────────────────────────────┘
+
+                        python monitor.py --summary                # resumo tabular de todas as tabelas
+                        python monitor.py --history 50             # histórico de batches (requer --state-db)
+                        python monitor.py --json                   # JSON (requer --state-db)
+                        python monitor.py --constraints            # ver constraints de todas as tabelas
+                        python monitor.py -i 5                     # refresh a cada 5s (padrão: 2s)
+
+                        python monitor.py --big-tables              # painel ao vivo das 10 tabelas grandes
+                        python monitor.py --big-tables -i 5        # refresh a cada 5s
+                        python monitor.py --big-tables --summary   # resumo tabular das 10 grandes
+
+
+
+----------------------------------------------------------------------------------------------------------
+5- Rodar a migracao das 8 maiores abaixo - 19:10  - 20:10
+----------------------------------------------------------------------------------------------------------
+
+sudo su - postgres
+
+cd /migracao_firebird
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+export PYTHONIOENCODING=utf-8
+source .venv/bin/activate
 
 nohup ./chama_migrator.sh CONTROLEVERSAO &
 nohup ./chama_migrator.sh HISTORICO_OPERACAO &
@@ -121,28 +185,37 @@ nohup ./chama_migrator.sh NMOV &
 nohup ./chama_migrator.sh OCORRENCIA_SISAT &
 nohup ./chama_migrator.sh PESSOA_PRETENDENTE &
 
+
+----------------------------------------------------------------------------------------------------------
+6- Rodar a migracao das 2 maiores LOG_EVENTOS e DOCUMENTO_OPERACAO em paralelo  abaixo - 19:11 - 20:11
+----------------------------------------------------------------------------------------------------------
+
+
+-- DOCUMENTO_OPERACAO
+
 nohup ./chama_migrator_doc_oper.sh   &
 
 -- LOG_EVENTOS PARALLEL
 
-
-  Uso:
   # Migração completa com 8 threads (padrão)
-  nohup bash migrator_log_eventos.sh > nohup_log_eventos.out 2>&1 &
-
-  # Sobrescrever número de threads
-  bash migrator_log_eventos.sh --threads 4
-
-  # Dry-run (conta linhas, não migra)
-  bash migrator_log_eventos.sh --dry-run
-
-  # Resetar estado e recomeçar do zero
-  bash migrator_log_eventos.sh --reset
-
-  # Monitorar em outra janela
-  python monitor.py --big-tables
+  nohup migrator_log_eventos.sh > nohup_log_eventos.out 2>&1 &
 
 
+                  ##### ALTERNATIVAS SÓ PARA DOCUMENTAR -- NAO USAR !!!! #####
+                  ### Sobrescrever número de threads
+                  ##bash migrator_log_eventos.sh --threads 4
+                  ### Dry-run (conta linhas, não migra)
+                  ##bash migrator_log_eventos.sh --dry-run
+                  ### Resetar estado e recomeçar do zero
+                  ##bash migrator_log_eventos.sh --reset
+                  ### Monitorar em outra janela
+                  ##python monitor.py --big-tables
+
+
+
+----------------------------------------------------------------------------------------------------------
+7- Rodar a migracao das 901 tabelas - SMALL TABLES
+----------------------------------------------------------------------------------------------------------
 
 -- SMALL TABLES
 
@@ -153,8 +226,6 @@ nohup ./chama_migrator_doc_oper.sh   &
   nohup ./migrator_smalltables.sh > nohup_smalltables.out 2>&1 &
 
   nohup ./migrator_smalltables.sh > nohup_smalltables_3faltando.out 2>&1 &
-
-
 
   # Acompanhar log
   tail -f nohup_smalltables.out
@@ -172,7 +243,7 @@ nohup ./chama_migrator_doc_oper.sh   &
   python monitor.py --big-tables  
 
 
-### MONITOR.py
+    ### MONITOR.py
 
    sudo su - postgres
 
@@ -214,6 +285,11 @@ nohup ./chama_migrator_doc_oper.sh   &
     python monitor.py --big-tables --summary   # resumo tabular das 10 grandes
 
 ### APOS A CARGA
+
+
+----------------------------------------------------------------------------------------------------------
+7- Rodar  HABILITA CONSTRAINTS BIG-TABLES
+----------------------------------------------------------------------------------------------------------
 
 #### HABILITA CONSTRAINTS BIG-TABLES
 
@@ -322,10 +398,13 @@ nohup ./chama_migrator_doc_oper.sh   &
   esperado, nada crítico
 
 
+----------------------------------------------------------------------------------------------------------
+8- Rodar Compara estrutura e count
+----------------------------------------------------------------------------------------------------------
 
-#### compara estrutura
+#### 
 
-   python gera_relatorio_compara_estrutura_fb2pg_html.py  --output relatorio_final_08abr1637.html
+   python gera_relatorio_compara_estrutura_fb2pg_html.py  --output relatorio_final_09abr.html
 
    /*
    #Executar verificação:
@@ -341,64 +420,101 @@ nohup ./chama_migrator_doc_oper.sh   &
    */
 
 
-#### CHECKSUM 
+
+----------------------------------------------------------------------------------------------------------
+9- Checksum em paralelo das 10 maiores - inicio 20:51
+----------------------------------------------------------------------------------------------------------
 
 (.venv) postgres@postgres-server-sp2:/migracao_firebird$ 
 
-  Fluxo paralelo:
-  1. Dispara 10 threads simultaneamente, cada uma com conexões FB+PG próprias
-  2. Conforme terminam, imprime ✓ tabela  X.Xs  (N/10) em tempo real
-  3. Após todas completarem, exibe os detalhes de cada tabela na ordem original
-  4. Exibe o resumo consolidado final
+  Fluxo paralelo: NAO FUNCIONOU, ESGOTOU 100% DA MEMORIA DO SERVIDOR
+   1. Dispara 10 threads simultaneamente, cada uma com conexões FB+PG próprias
+   2. Conforme terminam, imprime ✓ tabela  X.Xs  (N/10) em tempo real
+   3. Após todas completarem, exibe os detalhes de cada tabela na ordem original
+   4. Exibe o resumo consolidado final
 
-  Uso:
-  # Todas as 10 em paralelo (padrão)
-  python PosMigracao_comparaChecksum_bytea.py
+  # Todas as 10 em paralelo (padrão) - NAO FUNCIONOU, ESGOTOU 100% DA MEMORIA DO SERVIDOR
+  #####  NAO FUNCIONOU, ESGOTOU 100% DA MEMORIA DO SERVIDOR  ###python PosMigracao_comparaChecksum_bytea.py
+  
+  -- inicio 20:51 (com 2 em paralelo)
+  python PosMigracao_comparaChecksum_bytea.py --workers 2
 
 
-  # Verificar só uma tabela (modo sequencial, com barra de progresso)
-  python PosMigracao_comparaChecksum_bytea.py --table DOCUMENTO_OPERACAO
+            ############### outras formas de chamar caso necessario
+            # Verificar só uma tabela (modo sequencial, com barra de progresso)
+            #python PosMigracao_comparaChecksum_bytea.py --table DOCUMENTO_OPERACAO
+            # Controle de concorrência
+            #python PosMigracao_comparaChecksum_bytea.py --workers 5
 
-  # Controle de concorrência
-  python PosMigracao_comparaChecksum_bytea.py --workers 5
 
 
 
+----------------------------------------------------------------------------------------------------------
+10 - ANLYZE VERBOSE (100% da tabela para maior precisao no PLANNER do postgres, o padrao é 100 linhas)
+----------------------------------------------------------------------------------------------------------
 
 
+   psql
+   \c c6_producao
 
+   SET default_statistics_target = 10000; -- Máximo permitido (10.000)
+   ANALYZE VERBOSE;
 
+----------------------------------------------------------------------------------------------------------
+11 - GERAR O BACKUP PARA SER LEVADO PARA O EC2
+----------------------------------------------------------------------------------------------------------
 
+bash# EXPORT (com paralelizacao) - gera um diretorio
 
 
+mkdir -p /migracao_firebird/backup/c6_producao_dir
 
+/usr/bin/pg_dump \
+  -h localhost -p 5432  -U c6_producao_user \
+  -d c6_producao_dir \
+  -F d -j 10 \
+  -C -v \
+  -f  /migracao_firebird/backup/c6_producao_dir \
+2>&1 | tee -a /migracao_firebird/backup/backup-c6_producao.log
 
 
+----------------------------------------------------------------------------------------------------------
+12 - TRANSFERIR OS ARQUIVOS PARA O EC2 PRODUCAO COM SCP (ZECA)
+----------------------------------------------------------------------------------------------------------
 
 
 
+----------------------------------------------------------------------------------------------------------
+13 - CRIAR O DATABASE NA PRODUCAO E IMPORTAR O BACKUP
+----------------------------------------------------------------------------------------------------------
 
+Criar o database zerado c6_producao usando o CRIACAO_NOVO_BANCO_POSTGRES_C6_PROD_EC2_V2.SQL
 
+# IMPORT
+/usr/bin/pg_restore \
+  -h localhost \
+  -p 5432 \
+  -U c6_producao_user \
+  -d c6_producao_dir \
+  -F c \
+  -j 10 \
+  -C \
+  -v \
+  /backup/backup_logico/c6_producao.bak \
+2>&1 | tee -a /migracao_firebird/backup/restaurar-c6_alegria_tambem_apagar.log
 
- $env:PGCLIENTENCODING="latin1"
- $env:PGPASSWORD = "senha_prod"
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_ocorrencia.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_controleversao.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_documento_operacao.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_historico_operacao.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_log_eventos.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_nmov.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_ocorrencia.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_ocorrencia_sisat.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_operacao_credito.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_parcelasctb.sql
- psql -p 5435 c6_producao  -U postgres -f enable_constraints_pessoa_pretendente.sql
+5tEkZZwRydTUXarJ
 
 
-#### NAO PRECISA - python migrator_parallel_doc_oper.py --threads 4
+----------------------------------------------------------------------------------------------------------
+14 - LIGAR ARCHIVE, FAZER O 1O BACKUP LOGICO, FISICO, VACUUM, REBUILD, ANALYZE...
+----------------------------------------------------------------------------------------------------------
 
 
 
+----------------------------------------------------------------------------------------------------------
+15 - CONFERIR A REPLICA DO POSTGRES NO LAKE
+----------------------------------------------------------------------------------------------------------
 
 
 
@@ -406,98 +522,5 @@ nohup ./chama_migrator_doc_oper.sh   &
 
 
 
-
-
-
-
-
-
-
-
--- trobleshooting OOM Killer
-
-Para confirmar se o OOM Killer entrou em ação e "assassinou" o seu processo Python, você deve consultar os logs do kernel do Linux.Use um destes comandos (como root ou com sudo):
-
-1. O comando mais rápido (dmesg)O dmesg mostra as mensagens diretas do kernel. Filtre por "OOM" ou "Killed":
-bash
-
-sudo dmesg -T | grep -i -E 'oom|killed'
-
-   -T converte o timestamp do kernel para data/hora legível.Procure por linhas que dizem: "Out of memory: Killed process [PID] (python)".
-
-2. Consultando o log do sistema (journalctl)No Debian 13, o journalctl é a forma mais detalhada de ver o histórico:
-bash
-
-sudo journalctl -k --since "2 hour ago" | grep -i "out of memory"
-
-Isso mostrará apenas as mensagens de kernel da última hora.
-
-3. O arquivo de log tradicionalSe preferir ler o arquivo bruto (pode ser grande):
-bash
-
-sudo grep -i "killed process" /var/log/syslog
-
-# OU
-
-sudo grep -i "killed process" /var/log/kern.log
-
-O que você verá no log:Se foi o OOM Killer, você verá uma tabela de processos e uma mensagem final parecida com esta:
-
-Out of memory: Killed process 4085278 (python) total-vm:12345kB, anon-rss:6789kB, file-rss:0kB, shmem-rss:0kB
-
-
-CONTROLEVERSAO
-
-10:46:16 [INFO   ] migrator:   [██████████████████░░░░░░░░░░░░]  60.1% |      260,000/     432,602 | Lote    26 |      1,507 lin/s | ETA      1m54s | 2m52s
-10:46:23 [INFO   ] migrator:   [██████████████████░░░░░░░░░░░░]  62.4% |      270,000/     432,602 | Lote    27 |      1,507 lin/s | ETA      1m47s | 2m59s
-10:46:29 [INFO   ] migrator:   [███████████████████░░░░░░░░░░░]  64.7% |      280,000/     432,602 | Lote    28 |      1,510 lin/s | ETA      1m41s | 3m05s
-10:46:35 [INFO   ] migrator:   [████████████████████░░░░░░░░░░]  67.0% |      290,000/     432,602 | Lote    29 |      1,520 lin/s | ETA      1m33s | 3m10s
-10:46:41 [INFO   ] migrator:   [████████████████████░░░░░░░░░░]  69.3% |      300,000/     432,602 | Lote    30 |      1,523 lin/s | ETA      1m27s | 3m16s
-10:46:47 [INFO   ] migrator:   [█████████████████████░░░░░░░░░]  71.7% |      310,000/     432,602 | Lote    31 |      1,528 lin/s | ETA      1m20s | 3m22s
-10:46:52 [INFO   ] migrator:   [██████████████████████░░░░░░░░]  74.0% |      320,000/     432,602 | Lote    32 |      1,535 lin/s | ETA      1m13s | 3m28s
-10:48:35 [INFO   ] migrator:   [██████████████████████░░░░░░░░]  76.3% |      330,000/     432,602 | Lote    33 |      1,061 lin/s | ETA      1m36s | 5m11s
-10:52:39 [INFO   ] migrator:   [███████████████████████░░░░░░░]  78.6% |      340,000/     432,602 | Lote    34 |        612 lin/s | ETA      2m31s | 9m15s
-./chama_migrator.sh, linha 43: 4085278 Morto                   python migrator.py --table "$TABELA"
-
-[PASSO 2] Rodando Comparação de Checksum...
-..
-
-root@postgres-server-sp:/migracao_firebird/logs# sudo journalctl -k --since "2 hour ago" | grep -i "out of memory"
-
-Apr 03 10:54:33 postgres-server-sp kernel: Out of memory: Killed process 4085278 (python) total-vm:7143916kB, anon-rss:3726536kB, file-rss:0kB, shmem-rss:0kB, UID:101 pgtables:12980kB oom_score_adj:0
-root@postgres-server-sp:/migracao_firebird/logs#
-
-oot@postgres-server-sp:/migracao_firebird/logs# sudo dmesg -T | grep -i -E 'oom|killed' | tail -6
-[Thu Apr  2 23:15:06 2026] Out of memory: Killed process 3850626 (python) total-vm:7082244kB, anon-rss:3712448kB, file-rss:60kB, shmem-rss:0kB, UID:101 pgtables:12772kB oom_score_adj:0
-[Fri Apr  3 10:53:22 2026] head invoked oom-killer: gfp_mask=0x140cca(GFP_HIGHUSER_MOVABLE|__GFP_COMP), order=0, oom_score_adj=0
-[Fri Apr  3 10:53:22 2026]  oom_kill_process.cold+0x8/0x8d
-[Fri Apr  3 10:53:22 2026] [  pid  ]   uid  tgid total_vm      rss rss_anon rss_file rss_shmem pgtables_bytes swapents oom_score_adj name
-[Fri Apr  3 10:53:22 2026] oom-kill:constraint=CONSTRAINT_NONE,nodemask=(null),cpuset=/,mems_allowed=0,global_oom,task_memcg=/user.slice/user-1003.slice/session-6708.scope,task=python,pid=4085278,uid=101
-[Fri Apr  3 10:53:22 2026] Out of memory: Killed process 4085278 (python) total-vm:7143916kB, anon-rss:3726536kB, file-rss:0kB, shmem-rss:0kB, UID:101 pgtables:12980kB oom_score_adj:0
-root@postgres-server-sp:/migracao_firebird/logs#
-
-
-
-
--- conferencia
-SELECT 'CONTROLEVERSAO' AS tabela, COUNT(*) AS total FROM CONTROLEVERSAO
-UNION ALL
-SELECT 'LOG_EVENTOS', COUNT(*) FROM LOG_EVENTOS
-UNION ALL
-SELECT 'HISTORICO_OPERACAO', COUNT(*) FROM HISTORICO_OPERACAO
-UNION ALL
-SELECT 'OCORRENCIA', COUNT(*) FROM OCORRENCIA
-UNION ALL
-SELECT 'PARCELASCTB', COUNT(*) FROM PARCELASCTB
-UNION ALL
-SELECT 'OPERACAO_CREDITO', COUNT(*) FROM OPERACAO_CREDITO
-UNION ALL
-SELECT 'PESSOA_PRETENDENTE', COUNT(*) FROM PESSOA_PRETENDENTE
-UNION ALL
-SELECT 'NMOV', COUNT(*) FROM NMOV
-UNION ALL
-SELECT 'OCORRENCIA_SISAT', COUNT(*) FROM OCORRENCIA_SISAT
-UNION ALL
-SELECT 'DOCUMENTO_OPERACAO', COUNT(*) FROM DOCUMENTO_OPERACAO;
 
 
