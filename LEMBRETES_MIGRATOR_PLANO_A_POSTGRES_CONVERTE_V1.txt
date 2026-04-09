@@ -284,7 +284,7 @@ nohup ./chama_migrator_doc_oper.sh   &
 
 
 ----------------------------------------------------------------------------------------------------------
-9 - Rodar a criacao constraints   (SÓ NO FINAL DE TUDO!!!!!!!!!!!!!! - ESPERAR O POSTGRES CONVERTE TERMINAR)
+9 - Rodar a criacao constraints   (SÓ NO FINAL DE TUDO!!!!!!!!!!!!!! - ESPERAR O POSTGRES CONVERTE TERMINAR)  - incio 08:25 termino 08:26
 ----------------------------------------------------------------------------------------------------------
 
   (.venv) postgres@postgres-server-sp2:/migracao_firebird$ psql
@@ -299,7 +299,7 @@ nohup ./chama_migrator_doc_oper.sh   &
 
  
 ----------------------------------------------------------------------------------------------------------
-10 - Comparar estrutura e gera relatorio final HTML
+10 - Comparar estrutura e gera relatorio final HTML - inicio  08:28 as 08:31
 ----------------------------------------------------------------------------------------------------------
 
    python gera_relatorio_compara_estrutura_fb2pg_html.py  --output relatorio_final_09abr.html
@@ -314,18 +314,7 @@ nohup ./chama_migrator_doc_oper.sh   &
 
 
 ----------------------------------------------------------------------------------------------------------
-11 - ANLYZE VERBOSE (100% da tabela para maior precisao no PLANNER do postgres, o padrao é 100 linhas)
-----------------------------------------------------------------------------------------------------------
-
-
-   psql
-   \c c6_producao
-
-   SET default_statistics_target = 10000; -- Máximo permitido (10.000)
-   ANALYZE VERBOSE;
-
-----------------------------------------------------------------------------------------------------------
-12 - GERAR O BACKUP PARA SER LEVADO PARA O EC2
+11 - GERAR O BACKUP PARA SER LEVADO PARA O EC2 - backup iniciado as 08:31 as 08:47
 ----------------------------------------------------------------------------------------------------------
 
 bash# EXPORT (com paralelizacao) - gera um diretorio
@@ -335,21 +324,29 @@ mkdir -p /migracao_firebird/backup/c6_producao_dir
 
 /usr/bin/pg_dump \
   -h localhost -p 5432  -U c6_producao_user \
-  -d c6_producao_dir \
+  -d c6_producao \
   -F d -j 10 \
   -C -v \
   -f  /migracao_firebird/backup/c6_producao_dir \
 2>&1 | tee -a /migracao_firebird/backup/backup-c6_producao.log
 
+5tEkZZwRydTUXarJ
+
+
+tar -cvf bkp_c6_producao_09abr.tar /migracao_firebird/backup/c6_producao_dir
+
+
+-rw-rw-r--  1 postgres  postgres  5,4G abr  9 08:48 bkp_c6_producao_09abr.tar
+
 
 ----------------------------------------------------------------------------------------------------------
-13 - TRANSFERIR OS ARQUIVOS PARA O EC2 PRODUCAO COM SCP (ZECA)
+12 - TRANSFERIR OS ARQUIVOS PARA O EC2 PRODUCAO COM SCP (ZECA)
 ----------------------------------------------------------------------------------------------------------
 
 
 
 ----------------------------------------------------------------------------------------------------------
-14 - CRIAR O DATABASE NA PRODUCAO E IMPORTAR O BACKUP
+13 - CRIAR O DATABASE NA PRODUCAO E IMPORTAR O BACKUP
 ----------------------------------------------------------------------------------------------------------
 
 Criar o database zerado c6_producao usando o CRIACAO_NOVO_BANCO_POSTGRES_C6_PROD_EC2_V2.SQL
@@ -359,28 +356,32 @@ Criar o database zerado c6_producao usando o CRIACAO_NOVO_BANCO_POSTGRES_C6_PROD
   -h localhost \
   -p 5432 \
   -U c6_producao_user \
-  -d c6_producao_dir \
-  -F c \
+  -d c6_producao \
+  -F d \
   -j 10 \
-  -C \
   -v \
-  /backup/backup_logico/c6_producao.bak \
-2>&1 | tee -a /migracao_firebird/backup/restaurar-c6_alegria_tambem_apagar.log
+  /migracao_firebird/backup/c6_producao_dir \
+2>&1 | tee -a /migracao_firebird/backup/restaurar-c6_producao_09abr.log
+
 
 5tEkZZwRydTUXarJ
 
 
 ----------------------------------------------------------------------------------------------------------
-15 - LIGAR ARCHIVE, FAZER O 1O BACKUP LOGICO, FISICO, VACUUM, REBUILD, ANALYZE...
+14 - LIGAR ARCHIVE, FAZER O 1O BACKUP LOGICO, FISICO, VACUUM, REBUILD, ANALYZE...
 ----------------------------------------------------------------------------------------------------------
 
 
+   psql
+   \c c6_producao
+
+   SET default_statistics_target = 10000; -- Máximo permitido (10.000)
+   ANALYZE VERBOSE;
+
 
 ----------------------------------------------------------------------------------------------------------
-16 - CONFERIR A REPLICA DO POSTGRES NO LAKE
+15 - CONFERIR A REPLICA DO POSTGRES NO LAKE
 ----------------------------------------------------------------------------------------------------------
-
-
 
 
 
