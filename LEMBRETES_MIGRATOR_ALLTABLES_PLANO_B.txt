@@ -2,7 +2,7 @@
 # MIGRACAO C6 - BIGTABLES 
 ##########################################################################################################
 
-(.venv) postgres@postgres-server-sp2:/migracao_firebird$ ls -alrt /databases/scci.gdb
+(.venv) postgres@postgres-server-sp2:/migracao_firebird$ ls -alrt /backup/firebird/scci.gdb
 total 21231600
 -rw-r--r--  1 root root          13 Mar 31 10:40 senhabd-firebird
 drwxr-xr-x 21 root root        4096 Apr  4 13:41 ..
@@ -40,8 +40,8 @@ testa a conectividade
 #  root
 
 /opt/firebird/bin/isql
-CONNECT '/databases/scci.gdb' USER 'SYSDBA' PASSWORD 'Bstikqxd_yat';
-
+CONNECT '/backup/firebird/scci.gdb' USER 'SYSDBA' PASSWORD '';
+Tkyn6ws@qga89
 SELECT COUNT(RDB$RELATION_NAME) 
 FROM RDB$RELATIONS 
 WHERE RDB$VIEW_BLR IS NULL 
@@ -165,8 +165,10 @@ python monitor.py --big-tables
 
 
 ----------------------------------------------------------------------------------------------------------
-5- Rodar a migracao das 8 maiores abaixo - 19:10  - 20:10
+5- Rodar a migracao das 10 maiores abaixo - incicio 15:44 termino 16:55
 ----------------------------------------------------------------------------------------------------------
+
+-- 8 maiores
 
 sudo su - postgres
 
@@ -198,18 +200,18 @@ nohup ./chama_migrator_doc_oper.sh   &
 -- LOG_EVENTOS PARALLEL
 
   # Migração completa com 8 threads (padrão)
-  nohup migrator_log_eventos.sh > nohup_log_eventos.out 2>&1 &
+  nohup ./migrator_log_eventos.sh > nohup_log_eventos.out 2>&1 &
 
 
-                  ##### ALTERNATIVAS SÓ PARA DOCUMENTAR -- NAO USAR !!!! #####
-                  ### Sobrescrever número de threads
-                  ##bash migrator_log_eventos.sh --threads 4
-                  ### Dry-run (conta linhas, não migra)
-                  ##bash migrator_log_eventos.sh --dry-run
-                  ### Resetar estado e recomeçar do zero
-                  ##bash migrator_log_eventos.sh --reset
-                  ### Monitorar em outra janela
-                  ##python monitor.py --big-tables
+                                                                        ##### ALTERNATIVAS SÓ PARA DOCUMENTAR -- NAO USAR !!!! #####
+                                                                        ### Sobrescrever número de threads
+                                                                        ##bash migrator_log_eventos.sh --threads 4
+                                                                        ### Dry-run (conta linhas, não migra)
+                                                                        ##bash migrator_log_eventos.sh --dry-run
+                                                                        ### Resetar estado e recomeçar do zero
+                                                                        ##bash migrator_log_eventos.sh --reset
+                                                                        ### Monitorar em outra janela
+                                                                        ##python monitor.py --big-tables
 
 
 
@@ -225,19 +227,21 @@ nohup ./chama_migrator_doc_oper.sh   &
   # Rodar em nohup
   nohup ./migrator_smalltables.sh > nohup_smalltables.out 2>&1 &
 
-  nohup ./migrator_smalltables.sh > nohup_smalltables_3faltando.out 2>&1 &
-
-  # Acompanhar log
-  tail -f nohup_smalltables.out
+                                                                        
+                                                                        
+                                                                        ### troubleshooting se faltar alguma coisa
+                                                                        ##nohup ./migrator_smalltables.sh > nohup_smalltables_3faltando.out 2>&1 &
+                                                                        #### Acompanhar log
+                                                                        ###tail -f nohup_smalltables.out
 
   # Monitor em outra janela
   python monitor.py --small-tables
 
-  O "$@" passa qualquer argumento extra diretamente ao Python, então funciona:
-
-  nohup ./migrator_smalltables.sh --dry-run > nohup_smalltables.out 2>&1 &
-  nohup ./migrator_smalltables.sh --reset   > nohup_smalltables.out 2>&1 &
-  nohup ./migrator_smalltables.sh --workers 6 > nohup_smalltables.out 2>&1 &
+                                                                        ### troubleshooting se faltar alguma coisa
+                                                                        O "$@" passa qualquer argumento extra diretamente ao Python, então funciona:
+                                                                        nohup ./migrator_smalltables.sh --dry-run > nohup_smalltables.out 2>&1 &
+                                                                        nohup ./migrator_smalltables.sh --reset   > nohup_smalltables.out 2>&1 &
+                                                                        nohup ./migrator_smalltables.sh --workers 6 > nohup_smalltables.out 2>&1 &
 
 
   python monitor.py --big-tables  
@@ -288,26 +292,63 @@ nohup ./chama_migrator_doc_oper.sh   &
 
 
 ----------------------------------------------------------------------------------------------------------
-7- Rodar  HABILITA CONSTRAINTS BIG-TABLES
+7- Rodar  HABILITA CONSTRAINTS BIG-TABLES - inicio 17:04
 ----------------------------------------------------------------------------------------------------------
 
 #### HABILITA CONSTRAINTS BIG-TABLES
 
    (.venv) postgres@postgres-server-sp2:/migracao_firebird/logs$ cd ..
-   -rw-rw-r-- 1 postgres postgres 22228 Apr  3 14:10 enable_constraints.py
-   (.venv) postgres@postgres-server-sp2:/migracao_firebird$  python enable_constraints.py
-   20:37:26 [INFO   ] ======================================================================
-   20:37:26 [INFO   ]   ENABLE CONSTRAINTS — EXECUÇÃO
-   20:37:26 [INFO   ]   Tabelas: 10
-   20:37:26 [INFO   ]   Banco  : c6_producao @ localhost:5432
-   20:37:26 [INFO   ]   Log    : enable_constraints_20260407_203726.log
-   20:37:26 [INFO   ] ======================================================================
-   20:37:26 [INFO   ]
-   20:37:26 [INFO   ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   20:37:26 [INFO   ]   Tabela: parcelasctb  (enable_constraints_parcelasctb.sql)
-   20:37:26 [INFO   ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    (.venv) postgres@postgres-server-c6-prod:/migracao_firebird$ python enable_constraints.py > log_enable_constraints_10bigs.log
+    ^Z
+    [1]+  Stopped                 python enable_constraints.py > log_enable_constraints_10bigs.log
+    (.venv) postgres@postgres-server-c6-prod:/migracao_firebird$ bg
+    [1]+ python enable_constraints.py > log_enable_constraints_10bigs.log &
+    (.venv) postgres@postgres-server-c6-prod:/migracao_firebird$ tail -f log_enable_constraints_10bigs.log
+    17:06:11 [INFO   ]
+    17:06:11 [INFO   ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    17:06:11 [INFO   ]   Tabela: nmov  (enable_constraints_nmov.sql)
+    17:06:11 [INFO   ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    17:06:11 [INFO   ]   6 statements encontrados
+    17:06:13 [INFO   ]   [OK]   index           nmovx01  (2104ms)
+    17:06:18 [INFO   ]   [OK]   primary_key     xpk_nmov  (5640ms)
+    17:06:18 [INFO   ]   [OK]   config          synchronous_commit  (0ms)
+    17:06:18 [INFO   ]   [OK]   config          jit  (0ms)
+    17:06:19 [INFO   ]   [OK]   analyze         nmov  (546ms)
+    ...
+
+        
+                            RESUMO FINAL — ENABLE CONSTRAINTS
+    ╭───────────────────────────┬────────┬────────┬────────┬───────────┬────────────╮
+    │ Tabela                    │     OK │   Skip │   Fail │     Tempo │   Status   │
+    ├───────────────────────────┼────────┼────────┼────────┼───────────┼────────────┤
+    │ parcelasctb               │      5 │      0 │      0 │      2.2s │    OK ✓    │
+    ├───────────────────────────┼────────┼────────┼────────┼───────────┼────────────┤
+    │ nmov                      │      6 │      0 │      0 │     15.3s │    OK ✓    │
+    ├───────────────────────────┼────────┼────────┼────────┼───────────┼────────────┤
+    │ historico_operacao        │     10 │      0 │      0 │      3.9s │    OK ✓    │
+    ├───────────────────────────┼────────┼────────┼────────┼───────────┼────────────┤
+    │ log_eventos               │     14 │      0 │      0 │     56.0s │    OK ✓    │
+    ├───────────────────────────┼────────┼────────┼────────┼───────────┼────────────┤
+    │ operacao_credito          │     43 │      0 │      0 │     25.7s │    OK ✓    │
+    ├───────────────────────────┼────────┼────────┼────────┼───────────┼────────────┤
+    │ pessoa_pretendente        │     25 │      0 │      0 │     21.2s │    OK ✓    │
+    ├───────────────────────────┼────────┼────────┼────────┼───────────┼────────────┤
+    │ ocorrencia                │      6 │      0 │      0 │     317ms │    OK ✓    │
+    ├───────────────────────────┼────────┼────────┼────────┼───────────┼────────────┤
+    │ ocorrencia_sisat          │     39 │      0 │      0 │     34.1s │    OK ✓    │
+    ├───────────────────────────┼────────┼────────┼────────┼───────────┼────────────┤
+    │ controleversao            │      4 │      0 │      0 │     52.4s │    OK ✓    │
+    ├───────────────────────────┼────────┼────────┼────────┼───────────┼────────────┤
+    │ documento_operacao        │     26 │      0 │      0 │     59.6s │    OK ✓    │
+    ├───────────────────────────┼────────┼────────┼────────┼───────────┼────────────┤
+    │ TOTAL                     │    178 │      0 │      0 │    4.5min │ SUCESSO ✓  │
+    ╰───────────────────────────┴────────┴────────┴────────┴───────────┴────────────╯
+
+    Concluído em 4.5min. 178 OK | 0 já existiam.
+    17:10:39 [INFO   ]
 
 
+   ####### OBSERVAÇÃO ############
    A FASE 2 do migrator_smalltables.py chama cman.enable_all() para cada tabela completada, que
    recria nesta ordem:
 
@@ -334,7 +375,9 @@ nohup ./chama_migrator_doc_oper.sh   &
    constraints dela não são reabilitadas — e o log vai avisar com a instrução manual para executar o
    enable_constraints_{dest}.sql gerado.
 
-#### AJUSTES DOS INDICE SDE LOG_EVENTOS
+----------------------------------------------------------------------------------------------------------
+7.1-  AJUSTES (CRIACAO)  DOS INDICE DE LOG_EVENTOS QUE FICARAM FALTANDO NO CRIA.SQL
+----------------------------------------------------------------------------------------------------------
 
   -- log_eventos: índices do Firebird migrados para PostgreSQL
   -- ATENÇÃO: colunas multi-coluna estão em ordem alfabética (verificar ordem original no FB)
@@ -370,8 +413,9 @@ nohup ./chama_migrator_doc_oper.sh   &
       ON public.log_eventos (co_aplic, co_detalhe, dt_data_detalhe);
 
 
-  ---
-  movimentos_passivo — IDX só no PG
+  ----------------------------------------------------------------------------------------------------------
+  7.2 - movimentos_passivo — IDX só no PG
+ ----------------------------------------------------------------------------------------------------------
 
   O FB tem co_contrato e nu_cercefhab (ambos existem também no PG, então se cancelam). Os 3 extras (dt_geracao_arquivo,
   no_arquivo_gerado, dt_geracao_arquivo,nu_cercefhab) existem só no PG — foram criados diretamente lá, provavelmente por
@@ -382,20 +426,66 @@ nohup ./chama_migrator_doc_oper.sh   &
 
   O índice (nu_documento, nu_sequencial) existe no FB mas não foi migrado para PG. Criar se necessário:
 
+  ----------------------------------------------------------------------------------------------------------
   CREATE INDEX idx_status_documento_operacao_nu_doc_seq
       ON public.status_documento_operacao (nu_documento, nu_sequencial);
-
+  ----------------------------------------------------------------------------------------------------------
   ---
   tab_cartorio — IDX só no FB
 
   O PG já tem tab_cartoriox01/02/03 (que batem com o FB), mas o índice nu_municipio não foi migrado:
 
+  ----------------------------------------------------------------------------------------------------------
   CREATE INDEX idx_tab_cartorio_nu_municipio
       ON public.tab_cartorio (nu_municipio);
-
+  ----------------------------------------------------------------------------------------------------------
   ---
   Em resumo: 2 índices realmente faltando no PG, e 1 tabela com índices extras criados no PG após a migração. Tudo
   esperado, nada crítico
+
+
+  -- OUTRAS DIFERENÇAS QUE TAVA NO SCRIPT MAS NÃO CRIOU:
+  ALTER TABLE CONTROLEVERSAO ADD PRIMARY KEY (VERSAO, ID);
+  ALTER TABLE DOCUMENTO_CIP ADD CONSTRAINT R_CONTROLEVERSAO_DOC_CIP_MERGE FOREIGN KEY (NU_VERSAO_COM_MERGE, ID_DOC_COM_MERGE) REFERENCES CONTROLEVERSAO;
+  ALTER TABLE DOCUMENTO_CIP ADD CONSTRAINT R_CONTROLEVERSAO_DOCUMENTO_CIP FOREIGN KEY (NU_VERSAO_SEM_MERGE, ID_DOC_SEM_MERGE) REFERENCES CONTROLEVERSAO;
+  CREATE INDEX CONTROLEVERSAODATA ON CONTROLEVERSAO(ALT_DATA,ID);
+  CREATE INDEX AKCONTROLEVERSAOUSUARIO ON CONTROLEVERSAO( CO_USUARIO_IMPLANTACAO );
+  
+ ----------------------------------------------------------------------------------------------------------
+  7.3 - Ajsutes diferenças FKs , PKs e indices
+ ----------------------------------------------------------------------------------------------------------
+ 5tEkZZwRydTUXarJ
+
+ psql -h localhost -p 5432 -U "c6_producao_user" -d c6_producao -W < /migracao_firebird/tabelas_10_so_constraints_fk.sql  | tee -a /migracao_firebird/tabelas_10_so_constraints_fk.log
+
+ psql -h localhost -p 5432 -U "c6_producao_user" -d c6_producao -W < /migracao_firebird/tabelas_10_so_pks_constraints_check_e_indices.sql  | tee -a /migracao_firebird/tabelas_10_so_constraints_fk.log
+
+ psql -h localhost -p 5432 -U "c6_producao_user" -d c6_producao -W < /migracao_firebird/03_create_foreign_key_tudo.sql | tee -a /migracao_firebird/03_create_foreign_key_tudo.log
+  
+ ----------------------------------------------------------------------------------------------------------
+  7.4 - Ajsutes generator SEQUENCES
+ ----------------------------------------------------------------------------------------------------------
+
+(.venv) postgres@postgres-server-c6-prod:/migracao_firebird$ ./generators-gerar-c6bank-prod.sh
+
+##  GERA O DDL DE DROP E CREATE DAS SEQUENCES
+(.venv) postgres@postgres-server-c6-prod:/migracao_firebird$ ls -alrt | tail -4
+-rwxr-xr-x  1 postgres  postgres        321 Apr  9 17:27 generators-gerar-c6bank-prod.sh
+-rwxrwxr-x  1 postgres  postgres         93 Apr  9 17:27 generators-acertar-c6bank-prod-no-postgres.sh
+drwxrwxrwx  5 postgres  postgres     282624 Apr  9 17:28 .
+-rw-rw-r--  1 postgres  postgres      38208 Apr  9 17:28 gen-c6bank-prod.sql
+
+## CONFERE
+(.venv) postgres@postgres-server-c6-prod:/migracao_firebird$ vi gen-c6bank-prod.sql
+## RODA
+(.venv) postgres@postgres-server-c6-prod:/migracao_firebird$ ./generators-acertar-c6bank-prod-no-postgres.sh
+Password:
+Pager usage is off.
+DROP SEQUENCE
+CREATE SEQUENCE
+ setval
+--------
+...
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -524,3 +614,43 @@ Criar o database zerado c6_producao usando o CRIACAO_NOVO_BANCO_POSTGRES_C6_PROD
 
 
 
+
+
+
+
+
+
+ 
+  Solução: instalar o cliente Firebird no Debian
+
+  sudo apt-get update
+  sudo apt-get install libfbclient2
+
+  Verifique se instalou corretamente:
+
+  find /usr -name "libfbclient*" 2>/dev/null
+  ldconfig -p | grep fbclient
+
+  Se o Firebird não estiver nos repositórios padrão
+
+  Debian 13 pode ter o pacote com nome ligeiramente diferente:
+
+  apt-cache search firebird
+
+  Procure por libfbclient2 ou firebird3.0-utils. Se não aparecer, adicione os repositórios:
+
+  sudo apt-get install firebird3.0-utils libfirebird3.0
+
+  Alternativa: apontar o path manualmente
+
+  Se já tiver o .so em algum lugar no servidor, configure a variável de ambiente antes de rodar:
+
+  export FDB_LIBRARY_PATH=/caminho/para/libfbclient.so
+  python migrator.py ...
+
+  Ou adicione ao início do script de execução.
+
+  ---
+  Resumo: fbclient.dll é exclusivo do Windows. No Linux precisa de libfbclient.so.2 — instale via apt-get install
+  libfbclient2 e o fdb vai encontrar automaticamente.
+  
