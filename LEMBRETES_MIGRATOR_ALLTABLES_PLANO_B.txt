@@ -450,7 +450,7 @@ nohup ./chama_migrator_doc_oper.sh   &
   ALTER TABLE DOCUMENTO_CIP ADD CONSTRAINT R_CONTROLEVERSAO_DOCUMENTO_CIP FOREIGN KEY (NU_VERSAO_SEM_MERGE, ID_DOC_SEM_MERGE) REFERENCES CONTROLEVERSAO;
   CREATE INDEX CONTROLEVERSAODATA ON CONTROLEVERSAO(ALT_DATA,ID);
   CREATE INDEX AKCONTROLEVERSAOUSUARIO ON CONTROLEVERSAO( CO_USUARIO_IMPLANTACAO );
-  
+
  ----------------------------------------------------------------------------------------------------------
   7.3 - Ajsutes diferenças FKs , PKs e indices
  ----------------------------------------------------------------------------------------------------------
@@ -512,29 +512,253 @@ CREATE SEQUENCE
 
 
 ----------------------------------------------------------------------------------------------------------
-9- Checksum em paralelo das 10 maiores - inicio 20:51
+9- Checksum em paralelo das 10 maiores - Feito durante a migração, após cada carga
 ----------------------------------------------------------------------------------------------------------
 
-(.venv) postgres@postgres-server-sp2:/migracao_firebird$ 
+(.venv) postgres@postgres-server-c6-prod:/migracao_firebird$ tail -n 25 *.log^C
+(.venv) postgres@postgres-server-c6-prod:/migracao_firebird$ cd logs
+(.venv) postgres@postgres-server-c6-prod:/migracao_firebird/logs$ tail -n 25 *.log
+==> CONTROLEVERSAO_090426_154157.log <==
+│ dado                 │       0 │       0 │  ✓ OK  │
+│ te_observacao_versao │       0 │       0 │  ✓ OK  │
+│ te_imagem_reduzida   │ 438,913 │ 438,913 │  ✓ OK  │
+╰──────────────────────┴─────────┴─────────┴────────╯
 
-  Fluxo paralelo: NAO FUNCIONOU, ESGOTOU 100% DA MEMORIA DO SERVIDOR
-   1. Dispara 10 threads simultaneamente, cada uma com conexões FB+PG próprias
-   2. Conforme terminam, imprime ✓ tabela  X.Xs  (N/10) em tempo real
-   3. Após todas completarem, exibe os detalhes de cada tabela na ordem original
-   4. Exibe o resumo consolidado final
+───────────────────────────────── Resumo Final ─────────────────────────────────
 
-  # Todas as 10 em paralelo (padrão) - NAO FUNCIONOU, ESGOTOU 100% DA MEMORIA DO SERVIDOR
-  #####  NAO FUNCIONOU, ESGOTOU 100% DA MEMORIA DO SERVIDOR  ###python PosMigracao_comparaChecksum_bytea.py
-  
-  -- inicio 20:51 (com 2 em paralelo)
-  python PosMigracao_comparaChecksum_bytea.py --workers 2
+╔══════════════════╤══════════════╤══════════════╤═══════════════╤═════════════╗
+║                  │     Colunas  │      Linhas  │               │             ║
+║  Tabela          │       BYTEA  │      verif.  │  Divergênci…  │  Resultado  ║
+╟──────────────────┼──────────────┼──────────────┼───────────────┼─────────────╢
+║  controleversao  │           3  │           —  │            0  │    ✓ OK     ║
+╚══════════════════╧══════════════╧══════════════╧═══════════════╧═════════════╝
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│                 Todas as 1 tabelas passaram na verificação.                  │
+│                 Integridade dos dados BYTEA confirmada.                      │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Tempo total: 5.7s  |  Fim: 09/04/2026 16:04:04
+
+------------------------------------------
+Finalizado em: Thu Apr  9 16:04:04 -03 2026
+
+==> HISTORICO_OPERACAO_090426_154315.log <==
+│                                                        │
+╰────────────────────────────────────────────────────────╯
+Início: 09/04/2026 15:44:18
+
+Analisando historico_operacao... nenhuma coluna BLOB binário↔BYTEA encontrada (FB=[], PG=[])
+───────────────────────────────── Resumo Final ─────────────────────────────────
+
+╔══════════════════════╤═════════════╤═════════════╤═════════════╤═════════════╗
+║                      │    Colunas  │     Linhas  │             │             ║
+║  Tabela              │      BYTEA  │     verif.  │  Divergên…  │  Resultado  ║
+╟──────────────────────┼─────────────┼─────────────┼─────────────┼─────────────╢
+║  historico_operacao  │          0  │          —  │          0  │    ✓ OK     ║
+╚══════════════════════╧═════════════╧═════════════╧═════════════╧═════════════╝
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│                 Todas as 1 tabelas passaram na verificação.                  │
+│                 Integridade dos dados BYTEA confirmada.                      │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Tempo total: 0.1s  |  Fim: 09/04/2026 15:44:19
+
+------------------------------------------
+Finalizado em: Thu Apr  9 15:44:19 -03 2026
+
+==> NMOV_090426_154315.log <==
+╭──────────────┬───────────┬───────────┬────────╮
+│ Coluna BYTEA │    Qtd FB │    Qtd PG │ Status │
+├──────────────┼───────────┼───────────┼────────┤
+│ te_campos    │ 4,515,732 │ 4,515,732 │  ✓ OK  │
+╰──────────────┴───────────┴───────────┴────────╯
+
+───────────────────────────────── Resumo Final ─────────────────────────────────
+
+╔═══════════╤═════════════════╤═════════════════╤════════════════╤═════════════╗
+║  Tabela   │  Colunas BYTEA  │  Linhas verif.  │  Divergências  │  Resultado  ║
+╟───────────┼─────────────────┼─────────────────┼────────────────┼─────────────╢
+║  nmov     │              1  │              —  │             0  │    ✓ OK     ║
+╚═══════════╧═════════════════╧═════════════════╧════════════════╧═════════════╝
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│                 Todas as 1 tabelas passaram na verificação.                  │
+│                 Integridade dos dados BYTEA confirmada.                      │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Tempo total: 26.2s  |  Fim: 09/04/2026 16:55:23
+
+------------------------------------------
+Finalizado em: Thu Apr  9 16:55:23 -03 2026
+
+==> OCORRENCIA_090426_154315.log <==
+├─────────────────────────┼────────┼────────┼────────┤
+│ te_descricao_ocorrencia │  8,807 │  8,807 │  ✓ OK  │
+│ te_observacao_execucao  │  6,706 │  6,706 │  ✓ OK  │
+╰─────────────────────────┴────────┴────────┴────────╯
+
+───────────────────────────────── Resumo Final ─────────────────────────────────
+
+╔══════════════╤════════════════╤════════════════╤═══════════════╤═════════════╗
+║              │       Colunas  │        Linhas  │               │             ║
+║  Tabela      │         BYTEA  │        verif.  │  Divergênci…  │  Resultado  ║
+╟──────────────┼────────────────┼────────────────┼───────────────┼─────────────╢
+║  ocorrencia  │             2  │             —  │            0  │    ✓ OK     ║
+╚══════════════╧════════════════╧════════════════╧═══════════════╧═════════════╝
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│                 Todas as 1 tabelas passaram na verificação.                  │
+│                 Integridade dos dados BYTEA confirmada.                      │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Tempo total: 0.4s  |  Fim: 09/04/2026 15:44:15
+
+------------------------------------------
+Finalizado em: Thu Apr  9 15:44:16 -03 2026
+
+==> OCORRENCIA_SISAT_090426_154315.log <==
+│ te_descricao_ocorrencia │ 1,496,907 │ 1,496,907 │  ✓ OK  │
+│ te_observacao_execucao  │   897,464 │   897,464 │  ✓ OK  │
+│ te_variavel_tarefa      │ 1,505,569 │ 1,505,569 │  ✓ OK  │
+╰─────────────────────────┴───────────┴───────────┴────────╯
+
+───────────────────────────────── Resumo Final ─────────────────────────────────
+
+╔════════════════════╤══════════════╤══════════════╤═════════════╤═════════════╗
+║                    │     Colunas  │      Linhas  │             │             ║
+║  Tabela            │       BYTEA  │      verif.  │  Divergên…  │  Resultado  ║
+╟────────────────────┼──────────────┼──────────────┼─────────────┼─────────────╢
+║  ocorrencia_sisat  │           3  │           —  │          0  │    ✓ OK     ║
+╚════════════════════╧══════════════╧══════════════╧═════════════╧═════════════╝
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│                 Todas as 1 tabelas passaram na verificação.                  │
+│                 Integridade dos dados BYTEA confirmada.                      │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Tempo total: 9.4s  |  Fim: 09/04/2026 16:43:06
+
+------------------------------------------
+Finalizado em: Thu Apr  9 16:43:06 -03 2026
+
+==> OPERACAO_CREDITO_090426_154315.log <==
+│ te_qualificacao_iq             │       0 │       0 │  ✓ OK  │
+│ te_prioridade                  │       0 │       0 │  ✓ OK  │
+│ te_exigencia_cartorio          │   1,608 │   1,608 │  ✓ OK  │
+╰────────────────────────────────┴─────────┴─────────┴────────╯
+
+───────────────────────────────── Resumo Final ─────────────────────────────────
+
+╔════════════════════╤══════════════╤══════════════╤═════════════╤═════════════╗
+║                    │     Colunas  │      Linhas  │             │             ║
+║  Tabela            │       BYTEA  │      verif.  │  Divergên…  │  Resultado  ║
+╟────────────────────┼──────────────┼──────────────┼─────────────┼─────────────╢
+║  operacao_credito  │          33  │           —  │          0  │    ✓ OK     ║
+╚════════════════════╧══════════════╧══════════════╧═════════════╧═════════════╝
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│                 Todas as 1 tabelas passaram na verificação.                  │
+│                 Integridade dos dados BYTEA confirmada.                      │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Tempo total: 91.7s  |  Fim: 09/04/2026 16:27:19
+
+------------------------------------------
+Finalizado em: Thu Apr  9 16:27:19 -03 2026
+
+==> PARCELASCTB_090426_154315.log <==
+│ Coluna BYTEA │ Qtd FB │ Qtd PG │ Status │
+├──────────────┼────────┼────────┼────────┤
+│ te_dados     │ 41,107 │ 41,107 │  ✓ OK  │
+╰──────────────┴────────┴────────┴────────╯
+
+───────────────────────────────── Resumo Final ─────────────────────────────────
+
+╔═══════════════╤═══════════════╤════════════════╤═══════════════╤═════════════╗
+║               │      Colunas  │        Linhas  │               │             ║
+║  Tabela       │        BYTEA  │        verif.  │  Divergênci…  │  Resultado  ║
+╟───────────────┼───────────────┼────────────────┼───────────────┼─────────────╢
+║  parcelasctb  │            1  │             —  │            0  │    ✓ OK     ║
+╚═══════════════╧═══════════════╧════════════════╧═══════════════╧═════════════╝
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│                 Todas as 1 tabelas passaram na verificação.                  │
+│                 Integridade dos dados BYTEA confirmada.                      │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Tempo total: 0.4s  |  Fim: 09/04/2026 15:44:51
+
+------------------------------------------
+Finalizado em: Thu Apr  9 15:44:52 -03 2026
+
+==> PESSOA_PRETENDENTE_090426_154315.log <==
+│ te_envio_consulta_crivo      │ 42,659 │ 42,659 │  ✓ OK  │
+│ te_contrato_social           │ 42,659 │ 42,659 │  ✓ OK  │
+│ te_inf_adicional             │ 12,592 │ 12,592 │  ✓ OK  │
+╰──────────────────────────────┴────────┴────────┴────────╯
+
+───────────────────────────────── Resumo Final ─────────────────────────────────
+
+╔══════════════════════╤═════════════╤═════════════╤═════════════╤═════════════╗
+║                      │    Colunas  │     Linhas  │             │             ║
+║  Tabela              │      BYTEA  │     verif.  │  Divergên…  │  Resultado  ║
+╟──────────────────────┼─────────────┼─────────────┼─────────────┼─────────────╢
+║  pessoa_pretendente  │         15  │          —  │          0  │    ✓ OK     ║
+╚══════════════════════╧═════════════╧═════════════╧═════════════╧═════════════╝
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│                 Todas as 1 tabelas passaram na verificação.                  │
+│                 Integridade dos dados BYTEA confirmada.                      │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Tempo total: 29.6s  |  Fim: 09/04/2026 16:15:54
+
+------------------------------------------
+Finalizado em: Thu Apr  9 16:15:54 -03 2026
 
 
-            ############### outras formas de chamar caso necessario
-            # Verificar só uma tabela (modo sequencial, com barra de progresso)
-            #python PosMigracao_comparaChecksum_bytea.py --table DOCUMENTO_OPERACAO
-            # Controle de concorrência
-            #python PosMigracao_comparaChecksum_bytea.py --workers 5
+(.venv) postgres@postgres-server-c6-prod:/migracao_firebird/logs$
+
+           
+
+
+            ## OBSERVACAO NAO PRECISA RODAR  ############# outras formas de chamar caso necessario
+                            (.venv) postgres@postgres-server-sp2:/migracao_firebird$ 
+
+                            Fluxo paralelo: NAO FUNCIONOU, ESGOTOU 100% DA MEMORIA DO SERVIDOR
+                            1. Dispara 10 threads simultaneamente, cada uma com conexões FB+PG próprias
+                            2. Conforme terminam, imprime ✓ tabela  X.Xs  (N/10) em tempo real
+                            3. Após todas completarem, exibe os detalhes de cada tabela na ordem original
+                            4. Exibe o resumo consolidado final
+
+                            # Todas as 10 em paralelo (padrão) - NAO FUNCIONOU, ESGOTOU 100% DA MEMORIA DO SERVIDOR
+                            #####  NAO FUNCIONOU, ESGOTOU 100% DA MEMORIA DO SERVIDOR  ###python PosMigracao_comparaChecksum_bytea.py
+                            
+                            -- inicio 20:51 (com 1 em paralelo)
+                            python PosMigracao_comparaChecksum_bytea.py --workers 1
+
+                            # Verificar só uma tabela (modo sequencial, com barra de progresso)
+                            #python PosMigracao_comparaChecksum_bytea.py --table DOCUMENTO_OPERACAO
+                            # Controle de concorrência
+                            #python PosMigracao_comparaChecksum_bytea.py --workers 5
 
 
 
@@ -550,50 +774,6 @@ CREATE SEQUENCE
    SET default_statistics_target = 10000; -- Máximo permitido (10.000)
    ANALYZE VERBOSE;
 
-----------------------------------------------------------------------------------------------------------
-11 - GERAR O BACKUP PARA SER LEVADO PARA O EC2
-----------------------------------------------------------------------------------------------------------
-
-bash# EXPORT (com paralelizacao) - gera um diretorio
-
-
-mkdir -p /migracao_firebird/backup/c6_producao_dir
-
-/usr/bin/pg_dump \
-  -h localhost -p 5432  -U c6_producao_user \
-  -d c6_producao_dir \
-  -F d -j 10 \
-  -C -v \
-  -f  /migracao_firebird/backup/c6_producao_dir \
-2>&1 | tee -a /migracao_firebird/backup/backup-c6_producao.log
-
-
-----------------------------------------------------------------------------------------------------------
-12 - TRANSFERIR OS ARQUIVOS PARA O EC2 PRODUCAO COM SCP (ZECA)
-----------------------------------------------------------------------------------------------------------
-
-
-
-----------------------------------------------------------------------------------------------------------
-13 - CRIAR O DATABASE NA PRODUCAO E IMPORTAR O BACKUP
-----------------------------------------------------------------------------------------------------------
-
-Criar o database zerado c6_producao usando o CRIACAO_NOVO_BANCO_POSTGRES_C6_PROD_EC2_V2.SQL
-
-# IMPORT
-/usr/bin/pg_restore \
-  -h localhost \
-  -p 5432 \
-  -U c6_producao_user \
-  -d c6_producao_dir \
-  -F c \
-  -j 10 \
-  -C \
-  -v \
-  /backup/backup_logico/c6_producao.bak \
-2>&1 | tee -a /migracao_firebird/backup/restaurar-c6_alegria_tambem_apagar.log
-
-5tEkZZwRydTUXarJ
 
 
 ----------------------------------------------------------------------------------------------------------
