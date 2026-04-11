@@ -4,6 +4,6 @@ export LC_ALL=C.UTF-8
 export PYTHONIOENCODING=utf-8
 
 cd "$(dirname "$0")"
-source .venv/bin/activate
+. .venv/Scripts/activate
 
-python migrator_log_eventos.py "$@"
+python migrator_log_eventos_v2.py "$@"

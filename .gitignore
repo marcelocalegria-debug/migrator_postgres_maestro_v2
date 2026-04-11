@@ -16,6 +16,7 @@ fb/
 .venv
 .env
 config*.yaml
+config_*.yaml
 *.md
 *.json
 *.DOCKER

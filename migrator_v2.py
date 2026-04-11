@@ -75,6 +75,10 @@ if os.name == 'nt':
 from pg_constraints import ConstraintManager
 
 BASE_DIR = Path(__file__).parent
+WORK_DIR = BASE_DIR / 'work'
+LOG_DIR  = BASE_DIR / 'logs'
+WORK_DIR.mkdir(exist_ok=True)
+LOG_DIR.mkdir(exist_ok=True)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -410,7 +414,7 @@ class FirebirdToPgMigrator:
             self.config['migration']['_override_table'] = {
                 'source':   table.upper(),
                 'dest':     table.lower(),
-                'state_db': str(BASE_DIR / f'migration_state_{table.lower()}.db'),
+                'state_db': str(WORK_DIR / f'migration_state_{table.lower()}.db'),
             }
 
         # --log-file: sobrescreve path do log (para execução paralela)
@@ -447,7 +451,7 @@ class FirebirdToPgMigrator:
             root.removeHandler(h)
         root.setLevel(level)
 
-        fh = logging.FileHandler(cfg.get('file', 'migration.log'),
+        fh = logging.FileHandler(cfg.get('file', str(LOG_DIR / 'migration.log')),
                                  encoding='utf-8')
         fh.setFormatter(fmt)
         root.addHandler(fh)
@@ -478,7 +482,7 @@ class FirebirdToPgMigrator:
             result = []
             for t in cfg_m['tables']:
                 dest = t['dest']
-                state_db = t.get('state_db') or str(BASE_DIR / f'migration_state_{dest}.db')
+                state_db = t.get('state_db') or str(WORK_DIR / f'migration_state_{dest}.db')
                 result.append({
                     'source':   t['source'],
                     'dest':     dest,
@@ -490,7 +494,7 @@ class FirebirdToPgMigrator:
         return [{
             'source':   cfg_m['source_table'],
             'dest':     cfg_m['dest_table'],
-            'state_db': cfg_m.get('state_db') or str(BASE_DIR / 'migration_state.db'),
+            'state_db': cfg_m.get('state_db') or str(WORK_DIR / 'migration_state.db'),
         }]
 
     def _build_table_map(self, tables: List[dict]) -> dict:
@@ -930,9 +934,9 @@ class FirebirdToPgMigrator:
             cman = ConstraintManager(pg_params, schema, dest)
             n_obj = cman.collect_all()
 
-            state_path   = f'constraint_state_{dest}.json'
-            disable_path = f'disable_constraints_{dest}.sql'
-            enable_path  = f'enable_constraints_{dest}.sql'
+            state_path   = str(WORK_DIR / f'constraint_state_{dest}.json')
+            disable_path = str(WORK_DIR / f'disable_constraints_{dest}.sql')
+            enable_path  = str(WORK_DIR / f'enable_constraints_{dest}.sql')
 
             cman.save_state(state_path)
             with open(disable_path, 'w', encoding='utf-8') as f:
@@ -1235,7 +1239,10 @@ Exemplos:
   # Dry-run (mostra contagens sem escrever):
   python migrator.py --table CONTROLEVERSAO --dry-run
         """)
-    p.add_argument('-c', '--config', default='config.yaml')
+    # Tenta 'config.yaml'; se não existir, tenta 'config .yaml' (nome com espaço)
+    import os as _os
+    _default_cfg = 'config.yaml' if _os.path.exists('config.yaml') else 'config .yaml'
+    p.add_argument('-c', '--config', default=_default_cfg)
     p.add_argument('--table', type=str, default=None,
                    metavar='NOME',
                    help='Nome da tabela a migrar. '

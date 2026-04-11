@@ -76,6 +76,10 @@ if os.name == 'nt':
 from pg_constraints import ConstraintManager
 
 BASE_DIR     = Path(__file__).parent
+WORK_DIR     = BASE_DIR / 'work'
+LOG_DIR      = BASE_DIR / 'logs'
+WORK_DIR.mkdir(exist_ok=True)
+LOG_DIR.mkdir(exist_ok=True)
 SOURCE_TABLE = 'DOCUMENTO_OPERACAO'
 DEST_TABLE   = 'documento_operacao'
 PK_COLS      = ['NU_OPERACAO', 'NU_DOCUMENTO']
@@ -596,8 +600,8 @@ class WorkerThread(threading.Thread):
         self.shutdown             = shutdown_event
         self.use_insert           = use_insert
 
-        self.state_db_path = BASE_DIR / f'migration_state_{DEST_TABLE}_t{thread_id}.db'
-        self.log_file      = BASE_DIR / f'migration_{DEST_TABLE}_t{thread_id}.log'
+        self.state_db_path = WORK_DIR / f'migration_state_{DEST_TABLE}_t{thread_id}.db'
+        self.log_file      = LOG_DIR  / f'migration_{DEST_TABLE}_t{thread_id}.log'
         self.state         = StateManager(self.state_db_path)
         self.progress      = MigrationProgress()
         self.exception: Optional[Exception] = None
@@ -1048,7 +1052,7 @@ Nota: não mude --threads entre execuções sem usar --reset.
         sys.exit(1)
 
     log = _setup_main_logger(
-        str(BASE_DIR / f'migration_{DEST_TABLE}_parallel.log'))
+        str(LOG_DIR / f'migration_{DEST_TABLE}_parallel.log'))
 
     with open(args.config, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
@@ -1082,9 +1086,9 @@ Nota: não mude --threads entre execuções sem usar --reset.
     cman  = ConstraintManager(pg_params, schema, DEST_TABLE)
     n_obj = cman.collect_all()
 
-    state_path   = BASE_DIR / f'constraint_state_{DEST_TABLE}.json'
-    disable_path = BASE_DIR / f'disable_constraints_{DEST_TABLE}.sql'
-    enable_path  = BASE_DIR / f'enable_constraints_{DEST_TABLE}.sql'
+    state_path   = WORK_DIR / f'constraint_state_{DEST_TABLE}.json'
+    disable_path = WORK_DIR / f'disable_constraints_{DEST_TABLE}.sql'
+    enable_path  = WORK_DIR / f'enable_constraints_{DEST_TABLE}.sql'
 
     cman.save_state(str(state_path))
     disable_path.write_text(cman.generate_disable_script(), encoding='utf-8')
@@ -1117,7 +1121,7 @@ Nota: não mude --threads entre execuções sem usar --reset.
 
     # Caminho dos state DBs individuais das threads
     worker_db_paths = [
-        BASE_DIR / f'migration_state_{DEST_TABLE}_t{i}.db'
+        WORK_DIR / f'migration_state_{DEST_TABLE}_t{i}.db'
         for i in range(n_threads)
     ]
 
@@ -1167,7 +1171,7 @@ Nota: não mude --threads entre execuções sem usar --reset.
         for db_path in worker_db_paths:
             if db_path.exists():
                 StateManager(db_path).reset()
-        master_path = BASE_DIR / f'migration_state_{DEST_TABLE}.db'
+        master_path = WORK_DIR / f'migration_state_{DEST_TABLE}.db'
         if master_path.exists():
             StateManager(master_path).reset()
 
@@ -1187,7 +1191,7 @@ Nota: não mude --threads entre execuções sem usar --reset.
     log.info('━' * 70)
 
     # Estado agregado para monitor.py
-    master_state_path = BASE_DIR / f'migration_state_{DEST_TABLE}.db'
+    master_state_path = WORK_DIR / f'migration_state_{DEST_TABLE}.db'
     master_state      = StateManager(master_state_path)
     if not any_restart:
         master_state.reset()

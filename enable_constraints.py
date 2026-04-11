@@ -38,6 +38,8 @@ except ImportError:
     HAS_RICH = False
 
 BASE_DIR = Path(__file__).parent
+WORK_DIR = BASE_DIR / 'work'
+LOG_DIR  = BASE_DIR / 'logs'
 
 # Ordem de execução das tabelas (respeita dependências de FK entre tabelas)
 TABLE_ORDER = [
@@ -464,7 +466,7 @@ Exemplos:
                     help='Salva relatório em texto puro neste arquivo')
     args = ap.parse_args()
 
-    sql_dir = Path(args.dir) if args.dir else BASE_DIR
+    sql_dir = Path(args.dir) if args.dir else WORK_DIR
 
     # ── Config ───────────────────────────────────────────────
     cfg_path = Path(args.config) if Path(args.config).is_absolute() else BASE_DIR / args.config
@@ -485,7 +487,7 @@ Exemplos:
     }
 
     # ── Logging ──────────────────────────────────────────────
-    log_path = BASE_DIR / f'enable_constraints_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    log_path = LOG_DIR / f'enable_constraints_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s [%(levelname)-7s] %(message)s',
@@ -575,7 +577,7 @@ Exemplos:
 
     # Salva relatório em arquivo se solicitado
     report_path = Path(args.report) if args.report else (
-        BASE_DIR / f'relatorio_enable_constraints_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt')
+        LOG_DIR / f'relatorio_enable_constraints_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt')
     save_report(results, report_path)
     log.info(f'\n  Relatório salvo em: {report_path.name}')
 

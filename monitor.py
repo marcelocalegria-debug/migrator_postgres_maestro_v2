@@ -36,6 +36,8 @@ except ImportError:
     HAS_RICH = False
 
 BASE_DIR = Path(__file__).parent
+WORK_DIR = BASE_DIR / 'work'
+LOG_DIR  = BASE_DIR / 'logs'
 
 
 # ─── helpers ────────────────────────────────────────────────────────────────
@@ -144,7 +146,7 @@ BIG_TABLES = {
 
 def _discover_dbs() -> list[Path]:
     """Descobre todos os migration_state_*.db no diretório do script."""
-    return sorted(BASE_DIR.glob('migration_state_*.db'))
+    return sorted(WORK_DIR.glob('migration_state_*.db'))
 
 
 def _filter_dbs(dbs: list, only: set) -> list:
@@ -737,7 +739,7 @@ def display_small_tables_live(master_db: Path, interval: float = 2.0):
 # ─── show_constraints ────────────────────────────────────────────────────────
 
 def show_constraints(console=None):
-    files = sorted(BASE_DIR.glob('constraint_state_*.json'))
+    files = sorted(WORK_DIR.glob('constraint_state_*.json'))
     if not files:
         print('Nenhum arquivo constraint_state_*.json encontrado.')
         return
@@ -870,7 +872,7 @@ Exemplos:
     if args.small_tables:
         master_db_path = Path(
             args.master_db if args.master_db
-            else BASE_DIR / 'migration_state_smalltables_master.db'
+            else WORK_DIR / 'migration_state_smalltables_master.db'
         )
         display_small_tables_live(master_db_path, args.interval)
         return

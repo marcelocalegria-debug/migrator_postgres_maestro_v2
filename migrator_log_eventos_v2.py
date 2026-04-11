@@ -80,6 +80,10 @@ if os.name == 'nt':
 from pg_constraints import ConstraintManager
 
 BASE_DIR     = Path(__file__).parent
+WORK_DIR     = BASE_DIR / 'work'
+LOG_DIR      = BASE_DIR / 'logs'
+WORK_DIR.mkdir(exist_ok=True)
+LOG_DIR.mkdir(exist_ok=True)
 SOURCE_TABLE = 'LOG_EVENTOS'
 DEST_TABLE   = 'log_eventos'
 
@@ -574,8 +578,8 @@ class WorkerThread(threading.Thread):
         self.shutdown             = shutdown_event
         self.use_insert           = use_insert
 
-        self.state_db_path = BASE_DIR / f'migration_state_{DEST_TABLE}_t{thread_id}.db'
-        self.log_file      = BASE_DIR / f'migration_{DEST_TABLE}_t{thread_id}.log'
+        self.state_db_path = WORK_DIR / f'migration_state_{DEST_TABLE}_t{thread_id}.db'
+        self.log_file      = LOG_DIR  / f'migration_{DEST_TABLE}_t{thread_id}.log'
         self.state         = StateManager(self.state_db_path)
         self.progress      = MigrationProgress()
         self.exception: Optional[Exception] = None
@@ -1027,7 +1031,7 @@ Monitor:
         sys.exit(1)
 
     log = _setup_main_logger(
-        str(BASE_DIR / f'migration_{DEST_TABLE}_parallel.log'))
+        str(LOG_DIR / f'migration_{DEST_TABLE}_parallel.log'))
 
     with open(args.config, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
@@ -1062,9 +1066,9 @@ Monitor:
     cman  = ConstraintManager(pg_params, schema, DEST_TABLE)
     n_obj = cman.collect_all()
 
-    state_path   = BASE_DIR / f'constraint_state_{DEST_TABLE}.json'
-    disable_path = BASE_DIR / f'disable_constraints_{DEST_TABLE}.sql'
-    enable_path  = BASE_DIR / f'enable_constraints_{DEST_TABLE}.sql'
+    state_path   = WORK_DIR / f'constraint_state_{DEST_TABLE}.json'
+    disable_path = WORK_DIR / f'disable_constraints_{DEST_TABLE}.sql'
+    enable_path  = WORK_DIR / f'enable_constraints_{DEST_TABLE}.sql'
 
     cman.save_state(str(state_path))
     disable_path.write_text(cman.generate_disable_script(), encoding='utf-8')
@@ -1096,7 +1100,7 @@ Monitor:
     total_rows = count_rows(config, log)
 
     worker_db_paths = [
-        BASE_DIR / f'migration_state_{DEST_TABLE}_t{i}.db'
+        WORK_DIR / f'migration_state_{DEST_TABLE}_t{i}.db'
         for i in range(n_threads)
     ]
 
@@ -1146,7 +1150,7 @@ Monitor:
         for db_path in worker_db_paths:
             if db_path.exists():
                 StateManager(db_path).reset()
-        master_path = BASE_DIR / f'migration_state_{DEST_TABLE}.db'
+        master_path = WORK_DIR / f'migration_state_{DEST_TABLE}.db'
         if master_path.exists():
             StateManager(master_path).reset()
 
@@ -1165,7 +1169,7 @@ Monitor:
     log.info(f'  Fase 2 — Carga paralela ({n_threads} threads)')
     log.info('━' * 70)
 
-    master_state_path = BASE_DIR / f'migration_state_{DEST_TABLE}.db'
+    master_state_path = WORK_DIR / f'migration_state_{DEST_TABLE}.db'
     master_state      = StateManager(master_state_path)
     if not any_restart:
         master_state.reset()

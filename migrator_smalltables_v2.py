@@ -77,6 +77,10 @@ if os.name == 'nt':
 from pg_constraints import ConstraintManager
 
 BASE_DIR = Path(__file__).parent
+WORK_DIR = BASE_DIR / 'work'
+LOG_DIR  = BASE_DIR / 'logs'
+WORK_DIR.mkdir(exist_ok=True)
+LOG_DIR.mkdir(exist_ok=True)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -584,7 +588,7 @@ class FirebirdToPgMigrator:
             self.config['migration']['_override_table'] = {
                 'source':   table.upper(),
                 'dest':     table.lower(),
-                'state_db': str(BASE_DIR / f'migration_state_{table.lower()}.db'),
+                'state_db': str(WORK_DIR / f'migration_state_{table.lower()}.db'),
             }
 
         # --log-file: sobrescreve path do log (para execução paralela)
@@ -621,7 +625,7 @@ class FirebirdToPgMigrator:
             root.removeHandler(h)
         root.setLevel(level)
 
-        fh = logging.FileHandler(cfg.get('file', 'migration.log'),
+        fh = logging.FileHandler(cfg.get('file', str(LOG_DIR / 'migration.log')),
                                  encoding='utf-8')
         fh.setFormatter(fmt)
         root.addHandler(fh)
@@ -652,7 +656,7 @@ class FirebirdToPgMigrator:
             result = []
             for t in cfg_m['tables']:
                 dest = t['dest']
-                state_db = t.get('state_db') or str(BASE_DIR / f'migration_state_{dest}.db')
+                state_db = t.get('state_db') or str(WORK_DIR / f'migration_state_{dest}.db')
                 result.append({
                     'source':   t['source'],
                     'dest':     dest,
@@ -664,7 +668,7 @@ class FirebirdToPgMigrator:
         return [{
             'source':   cfg_m['source_table'],
             'dest':     cfg_m['dest_table'],
-            'state_db': cfg_m.get('state_db') or str(BASE_DIR / 'migration_state.db'),
+            'state_db': cfg_m.get('state_db') or str(WORK_DIR / 'migration_state.db'),
         }]
 
     def _build_table_map(self, tables: List[dict]) -> dict:
@@ -1080,7 +1084,7 @@ class FirebirdToPgMigrator:
                 src = row[0].strip().upper()
                 if src not in exclude:
                     dest = src.lower()
-                    state_db = str(BASE_DIR / f'migration_state_{dest}.db')
+                    state_db = str(WORK_DIR / f'migration_state_{dest}.db')
                     tables.append({
                         'source':   src,
                         'dest':     dest,
@@ -1116,7 +1120,7 @@ class FirebirdToPgMigrator:
 
         if n_workers is None:
             n_workers = cfg_m.get('parallel_workers', 4)
-        master_db = str(BASE_DIR / cfg_m.get(
+        master_db = str(WORK_DIR / cfg_m.get(
             'master_state_db', 'migration_state_smalltables_master.db'))
 
         self.log.info('=' * 70)
@@ -1168,9 +1172,9 @@ class FirebirdToPgMigrator:
             try:
                 cman = ConstraintManager(pg_params, schema, dest)
                 n_obj = cman.collect_all()
-                state_path   = str(BASE_DIR / f'constraint_state_{dest}.json')
-                disable_path = str(BASE_DIR / f'disable_constraints_{dest}.sql')
-                enable_path  = str(BASE_DIR / f'enable_constraints_{dest}.sql')
+                state_path   = str(WORK_DIR / f'constraint_state_{dest}.json')
+                disable_path = str(WORK_DIR / f'disable_constraints_{dest}.sql')
+                enable_path  = str(WORK_DIR / f'enable_constraints_{dest}.sql')
                 cman.save_state(state_path)
                 with open(disable_path, 'w', encoding='utf-8') as f:
                     f.write(cman.generate_disable_script())
@@ -1199,7 +1203,7 @@ class FirebirdToPgMigrator:
 
         args_list = [
             (self._config_path, t['source'], t['dest'],
-             str(BASE_DIR / f'migration_state_{t["dest"]}.db'))
+             str(WORK_DIR / f'migration_state_{t["dest"]}.db'))
             for t in pending
         ]
 
@@ -1255,7 +1259,7 @@ class FirebirdToPgMigrator:
 
         for i, t in enumerate(completed_tables, 1):
             dest = t['dest']
-            state_path = str(BASE_DIR / f'constraint_state_{dest}.json')
+            state_path = str(WORK_DIR / f'constraint_state_{dest}.json')
             if not Path(state_path).exists():
                 continue
             try:
@@ -1313,7 +1317,7 @@ class FirebirdToPgMigrator:
             'password': cfg_pg['password'],
         }
 
-        state_files = sorted(BASE_DIR.glob('constraint_state_*.json'))
+        state_files = sorted(WORK_DIR.glob('constraint_state_*.json'))
         if not state_files:
             self.log.error(
                 '  Nenhum arquivo constraint_state_*.json encontrado. '
@@ -1420,9 +1424,9 @@ class FirebirdToPgMigrator:
             cman = ConstraintManager(pg_params, schema, dest)
             n_obj = cman.collect_all()
 
-            state_path   = f'constraint_state_{dest}.json'
-            disable_path = f'disable_constraints_{dest}.sql'
-            enable_path  = f'enable_constraints_{dest}.sql'
+            state_path   = str(WORK_DIR / f'constraint_state_{dest}.json')
+            disable_path = str(WORK_DIR / f'disable_constraints_{dest}.sql')
+            enable_path  = str(WORK_DIR / f'enable_constraints_{dest}.sql')
 
             cman.save_state(state_path)
             with open(disable_path, 'w', encoding='utf-8') as f:

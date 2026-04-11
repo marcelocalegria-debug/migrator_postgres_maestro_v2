@@ -32,9 +32,9 @@ select * from versao_inst order by nu_versao;
 $env:PGPASSWORD='c58d9143563c47398f8e170aab79963c'
 psql -h localhost -U postgres -W
 
-createdb -h localhost -U postgres -W c6_producao_pgconv
+-- criar o banco com CRIACAO_NOVO_BANCO_POSTGRES_C6_PROD_EC2_V2.SQL
 
-psql -h localhost -U postgres -W -d c6_producao_pgconv -f c6_producao_pg_converter_equinix.sql
+psql -h localhost -U postgres -W -d c6_producao -f c6_producao_pg_converter_equinix.sql
 
 c58d9143563c47398f8e170aab79963c
 
@@ -116,47 +116,12 @@ EXIT;
 ----------------------------------------------------------------------------------------------------------
 
 ----------------------------------------------------------------------------------------------------------
-2- Criar o esquema c6_producao usando o cria976_pg.sql
+2- Criar o esquema c6_producao usando c6_producao_pg_converter_equinix
 ----------------------------------------------------------------------------------------------------------
--- cria.sql
+-- c6_producao_pg_converter_equinix.sql
 
-psql -h localhost -p 5432 -U "c6_producao_user" -d c6_producao -W < /migracao_firebird/cria976_pg.sql  | tee -a /migracao_firebird/imp_cria_976_7abril.log
-
+psql -h localhost -U c6_producao_user -W -d c6_producao -f c6_producao_pg_converter_equinix.sql  | tee -a /migracao_firebird/c6_producao_pg_converter_equinix.log
 5tEkZZwRydTUXarJ
-
-
-----------------------------------------------------------------------------------------------------------
-3- Ajuste das 3 tabelas faltando no cria.sql 
-----------------------------------------------------------------------------------------------------------
-
--- public.arq_co_aplic definition
--- Drop table
--- DROP TABLE public.arq_co_aplic;
-
-CREATE TABLE public.arq_co_aplic (
-	co_aplic int4 NOT NULL,
-	CONSTRAINT arq_co_aplic_pkey PRIMARY KEY (co_aplic)
-);
-
--- public.ordem_pretendente definition
--- Drop table
--- DROP TABLE public.ordem_pretendente;
-
-CREATE TABLE public.ordem_pretendente (
-	nu_pretendente varchar(9) DEFAULT ''::character varying NOT NULL,
-	nu_ordem int4 DEFAULT 0 NULL,
-	CONSTRAINT ordem_pretendente_pkey PRIMARY KEY (nu_pretendente)
-);
-
--- public.tmp_exc_log definition
--- Drop table
--- DROP TABLE public.tmp_exc_log;
-
-CREATE TABLE public.tmp_exc_log (
-	co_log int4 NOT NULL,
-	CONSTRAINT tmp_exc_log_pkey PRIMARY KEY (co_log)
-);
-
 
 ----------------------------------------------------------------------------------------------------------
 4- Liga o monitor - 19:10
@@ -220,14 +185,27 @@ export LC_ALL=C.UTF-8
 export PYTHONIOENCODING=utf-8
 source .venv/bin/activate
 
+nohup ./chama_migrator.sh PARCELASCTB &
 nohup ./chama_migrator.sh CONTROLEVERSAO &
 nohup ./chama_migrator.sh HISTORICO_OPERACAO &
 nohup ./chama_migrator.sh OCORRENCIA &
-nohup ./chama_migrator.sh PARCELASCTB &
+
 nohup ./chama_migrator.sh OPERACAO_CREDITO &
 nohup ./chama_migrator.sh NMOV &
 nohup ./chama_migrator.sh OCORRENCIA_SISAT &
 nohup ./chama_migrator.sh PESSOA_PRETENDENTE &
+
+
+-- ou pelo Windows
+-- ou pelo Windows
+python.exe .\migrator_v2.py --table PARCELASCTB
+python.exe .\migrator_v2.py --table CONTROLEVERSAO    
+python.exe .\migrator_v2.py --table HISTORICO_OPERACAO
+python.exe .\migrator_v2.py --table OCORRENCIA        
+python.exe .\migrator_v2.py --table OPERACAO_CREDITO  
+python.exe .\migrator_v2.py --table NMOV              
+python.exe .\migrator_v2.py --table OCORRENCIA_SISAT  
+python.exe .\migrator_v2.py --table PESSOA_PRETENDENTE
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -239,12 +217,21 @@ nohup ./chama_migrator.sh PESSOA_PRETENDENTE &
 
 nohup ./chama_migrator_doc_oper.sh   &
 
+
+-- ou pelo windows - python migrator_parallel_doc_oper_v2.py --threads 4
+
+
+
 -- LOG_EVENTOS PARALLEL
 
-  # Migração completa com 8 threads (padrão)
-  nohup ./migrator_log_eventos.sh > nohup_log_eventos.out 2>&1 &
+# Migração completa com 8 threads (padrão)
+
+nohup ./migrator_log_eventos.sh > nohup_log_eventos.out 2>&1 &
 
 
+
+-- ou pelo windows 
+python migrator_log_eventos_v2.py 
                                                                         ##### ALTERNATIVAS SÓ PARA DOCUMENTAR -- NAO USAR !!!! #####
                                                                         ### Sobrescrever número de threads
                                                                         ##bash migrator_log_eventos.sh --threads 4
@@ -269,6 +256,9 @@ nohup ./chama_migrator_doc_oper.sh   &
   # Rodar em nohup
   nohup ./migrator_smalltables.sh > nohup_smalltables.out 2>&1 &
 
+
+
+  -- OU PELO WINDOWS - python migrator_smalltables_v2.py --small-tables
                                                                         
                                                                         
                                                                         ### troubleshooting se faltar alguma coisa
