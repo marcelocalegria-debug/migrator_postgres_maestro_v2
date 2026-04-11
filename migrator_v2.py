@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-migrator.py
+migrator_v2.py
 ===========
 Migra uma tabela inteira do Firebird 3 → PostgreSQL 18.
 
@@ -16,12 +16,12 @@ Correções nesta versão:
   - Tratamento de memóriaview de BLOBs
 
 Uso:
-    python migrator.py                          # inicia ou recomeça
-    python migrator.py --reset                  # recomeça do zero
-    python migrator.py --dry-run                # simulação
-    python migrator.py --generate-scripts-only  # só gera SQL
-    python migrator.py --batch-size 10000       # sobrescreve batch
-    python migrator.py --use-insert             # usa INSERT em vez de COPY
+    python migrator_v2.py                          # inicia ou recomeça
+    python migrator_v2.py --reset                  # recomeça do zero
+    python migrator_v2.py --dry-run                # simulação
+    python migrator_v2.py --generate-scripts-only  # só gera SQL
+    python migrator_v2.py --batch-size 10000       # sobrescreve batch
+    python migrator_v2.py --use-insert             # usa INSERT em vez de COPY
 """
 
 import sys
@@ -1230,19 +1230,16 @@ def main():
         epilog="""
 Exemplos:
   # Migrar tabela especifica (recomendado para execucao paralela):
-  python migrator.py --table CONTROLEVERSAO
-  python migrator.py --table LOG_EVENTOS         # em outro terminal
+  python migrator_v2.py --table CONTROLEVERSAO
+  python migrator_v2.py --table LOG_EVENTOS         # em outro terminal
 
   # Apenas gerar scripts SQL (sem migrar):
-  python migrator.py --table CONTROLEVERSAO --generate-scripts-only
+  python migrator_v2.py --table CONTROLEVERSAO --generate-scripts-only
 
   # Dry-run (mostra contagens sem escrever):
-  python migrator.py --table CONTROLEVERSAO --dry-run
+  python migrator_v2.py --table CONTROLEVERSAO --dry-run
         """)
-    # Tenta 'config.yaml'; se não existir, tenta 'config .yaml' (nome com espaço)
-    import os as _os
-    _default_cfg = 'config.yaml' if _os.path.exists('config.yaml') else 'config .yaml'
-    p.add_argument('-c', '--config', default=_default_cfg)
+    p.add_argument('-c', '--config', default='config.yaml')
     p.add_argument('--table', type=str, default=None,
                    metavar='NOME',
                    help='Nome da tabela a migrar. '
