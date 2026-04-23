@@ -203,8 +203,8 @@ def main():
 
     text_count = sum(1 for t, c in columns if not is_binary_column(t, c))
     binary_count = len(columns) - text_count
-    print(f'  → {text_count} para converter (texto)')
-    print(f'  → {binary_count} para manter (binário)')
+    print(f'  -> {text_count} para converter (texto)')
+    print(f'  -> {binary_count} para manter (binário)')
 
     sql = generate_sql(columns, args.schema)
 

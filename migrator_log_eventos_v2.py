@@ -60,19 +60,26 @@ if os.name == 'nt' and hasattr(os, 'add_dll_directory'):
 
 import fdb
 
-if os.name == 'nt':
-    for _p in [
-        os.path.abspath(os.path.join(os.path.dirname(__file__) or '.', 'fbclient.dll')),
-        r'C:\Program Files\Firebird\Firebird_3_0\fbclient.dll',
-        r'C:\Program Files\Firebird\Firebird_4_0\fbclient.dll',
-        r'C:\Program Files\Firebird\Firebird_5_0\fbclient.dll',
-        r'C:\Program Files\Firebird\Firebird_2_5\bin\fbclient.dll',
-        r'C:\Program Files (x86)\Firebird\Firebird_3_0\fbclient.dll',
-        r'C:\Program Files (x86)\Firebird\Firebird_2_5\bin\fbclient.dll',
-    ]:
+if os.name == "nt":
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    _fb_paths = [
+        os.path.join(script_dir, "fbclient.dll"),
+        os.path.abspath("fbclient.dll"),
+        r"C:\Program Files\Firebird\Firebird_3_0\fbclient.dll",
+        r"C:\Program Files\Firebird\Firebird_4_0\fbclient.dll",
+        r"C:\Program Files\Firebird\Firebird_5_0\fbclient.dll",
+        r"C:\Program Files\Firebird\Firebird_2_5\bin\fbclient.dll",
+        r"C:\Program Files (x86)\Firebird\Firebird_3_0\fbclient.dll",
+        r"C:\Program Files (x86)\Firebird\Firebird_2_5\bin\fbclient.dll",
+    ]
+    for _p in _fb_paths:
         if os.path.exists(_p):
             try:
                 fdb.load_api(_p)
+                break
+            except Exception:
+                pass
+
                 break
             except Exception:
                 pass

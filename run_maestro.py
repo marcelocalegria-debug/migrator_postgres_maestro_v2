@@ -1,8 +1,9 @@
 import subprocess
 import time
 
+import sys
 process = subprocess.Popen(
-    ['python', 'maestro.py', '--resume', '0001'],
+    [sys.executable, 'maestro.py', '--resume', '0001'],
     stdin=subprocess.PIPE,
     stdout=subprocess.PIPE,
     stderr=subprocess.STDOUT,
