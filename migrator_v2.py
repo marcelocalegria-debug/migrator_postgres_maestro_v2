@@ -2,11 +2,11 @@
 """
 migrator_v2.py
 ===========
-Migra uma tabela inteira do Firebird 3 → PostgreSQL 18.
+Migra uma tabela inteira do Firebird 3 -> PostgreSQL 18.
 
 Correções nesta versão:
   - SELECT COUNT(*) com sintaxe corrigida
-  - BLOB TEXT convertido de WIN1252 → UTF-8 antes de inserir no PG
+  - BLOB TEXT convertido de WIN1252 -> UTF-8 antes de inserir no PG
   - RDB$DB_KEY como paginação fallback (sem PK) — reiniciável e rápido
   - Inserção via COPY protocol (3-5× mais rápido que execute_values)
   - Sub-batching automático em caso de erro
@@ -88,9 +88,20 @@ WORK_DIR.mkdir(exist_ok=True)
 LOG_DIR.mkdir(exist_ok=True)
 
 
-# ═══════════════════════════════════════════════════════════════
-#  MAPEAMENTO DE TIPOS FIREBIRD → POSTGRESQL
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+#  MAPEAMENTO DE TIPOS FIREBIRD -> POSTGRESQL
+# ===============================================================
+
+@dataclass
+class ColumnMeta:
+    name: str
+    fb_type_code: int
+    pg_type: str
+    is_blob: bool = False
+    blob_subtype: int = 0      # 0=binary, 1=text
+    fb_charset: str = 'NONE'
+    nullable: bool = True
+    position: int = 0
 
 # RDB$FIELD_TYPE codes
 _FB = {
@@ -140,7 +151,7 @@ def _fmt_dur(seconds: float) -> str:
     return f'{s}s'
 
 
-# Mapa Firebird charset → codec Python para decodificação de BLOB TEXT
+# Mapa Firebird charset -> codec Python para decodificação de BLOB TEXT
 _FB_CHARSET_TO_PYTHON: dict = {
     'WIN1252':    'cp1252',
     'WIN1250':    'cp1250',
@@ -156,7 +167,7 @@ _FB_CHARSET_TO_PYTHON: dict = {
     'NONE':       'latin-1',   # NONE = raw bytes, latin-1 é seguro
 }
 
-# Mapa de nomes alternativos (config.yaml) → nome Firebird para fdb.connect()
+# Mapa de nomes alternativos (config.yaml) -> nome Firebird para fdb.connect()
 _CONFIG_CHARSET_TO_FB: dict = {
     'iso-8859-1':   'ISO8859_1',
     'iso8859-1':    'ISO8859_1',
@@ -184,7 +195,7 @@ def _fb_charset_to_python(fb_charset: str) -> str:
 def _convert_blob(val, blob_subtype: int, charset: str) -> Optional[bytes]:
     """
     [BUG FIX] Converte BLOB do Firebird para bytes adequados ao PostgreSQL.
-    - BLOB TEXT (subtype 1): lê bytes e decodifica charset Firebird → UTF-8.
+    - BLOB TEXT (subtype 1): lê bytes e decodifica charset Firebird -> UTF-8.
     - BLOB BINARY (subtype 0): lê bytes diretamente.
     - memoryview: converte para bytes.
     """
@@ -257,6 +268,7 @@ def _copy_row_str(row: tuple, col_count: int) -> str:
 #  MIGRADOR
 # ═══════════════════════════════════════════════════════════════
 
+class FirebirdToPgMigrator:
     def __init__(self, config_path: str, override_batch_size: int = None,
                  use_insert: bool = False, override_table: str = None,
                  override_log_file: str = None, master_db_path: str = None,
@@ -335,7 +347,7 @@ def _copy_row_str(row: tuple, col_count: int) -> str:
             root.addHandler(ch)
 
     def _on_signal(self, signum, frame):
-        self.log.warning(f'⚠ Sinal {signum} — finalizando batch atual...')
+        self.log.warning(f'!! Sinal {signum} - finalizando batch atual...')
         self._shutdown = True
 
     # ─── resolução de tabelas ────────────────────────────────
@@ -371,7 +383,7 @@ def _copy_row_str(row: tuple, col_count: int) -> str:
         }]
 
     def _build_table_map(self, tables: List[dict]) -> dict:
-        """Mapeia nome Firebird (MAIÚSCULAS) → nome PG destino."""
+        """Mapeia nome Firebird (MAIÚSCULAS) -> nome PG destino."""
         return {t['source'].upper(): t['dest'] for t in tables}
 
     # ─── conexões ───────────────────────────────────────────
@@ -687,7 +699,7 @@ def _copy_row_str(row: tuple, col_count: int) -> str:
     def _convert_row(self, row: tuple) -> tuple:
         """
         [BUG FIX] Converte linha do Firebird para formato PG.
-        BLOB TEXT: WIN1252→UTF-8. BLOB BINARY: bytes puros.
+        BLOB TEXT: WIN1252->UTF-8. BLOB BINARY: bytes puros.
         """
         out = []
         for i, col in enumerate(self.columns):
@@ -762,7 +774,7 @@ def _copy_row_str(row: tuple, col_count: int) -> str:
         Orquestra a migração.
         """
         self.log.info('=' * 70)
-        self.log.info('  MIGRAÇÃO FIREBIRD 3 → POSTGRESQL')
+        self.log.info('  MIGRAÇÃO FIREBIRD 3 -> POSTGRESQL')
         self.log.info('=' * 70)
 
         tables = self._resolve_tables()
@@ -787,25 +799,25 @@ def _copy_row_str(row: tuple, col_count: int) -> str:
         self.progress = MigrationProgress()
 
         self.log.info('')
-        self.log.info(f'  ── {source} → {dest} ──')
+        self.log.info(f'  -- {source} -> {dest} --')
 
-        # ── Metadados ────────────────────────────────────────
+        # -- Metadados ----------------------------------------
         self.columns = self._discover_columns(source)
         pk_cols    = self._discover_pk(source)
         use_db_key = not pk_cols
 
         self._check_dest_table(source)
 
-        # ── Checkpoint ───────────────────────────────────────
+        # -- Checkpoint ---------------------------------------
         saved      = self._state.load_progress()
         is_restart = False
 
         if (saved and saved.status in ('running', 'paused', 'failed')
                 and saved.rows_migrated > 0):
             is_restart = True
-            self.log.info(f'  RESTART — {saved.rows_migrated:,} linhas já migradas.')
+            self.log.info(f'  RESTART - {saved.rows_migrated:,} linhas já migradas.')
 
-        # ── Contagem ─────────────────────────────────────────
+        # -- Contagem -----------------------------------------
         if not is_restart or not saved.total_rows:
             total_rows = self._count_rows(source)
         else:
@@ -941,10 +953,6 @@ def main():
     except Exception as e:
         logging.getLogger('migrator').error(f'Fatal: {e}', exc_info=True)
         sys.exit(1)
-
-if __name__ == '__main__':
-    main()
-
 
 if __name__ == '__main__':
     main()

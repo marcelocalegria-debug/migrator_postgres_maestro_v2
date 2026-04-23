@@ -74,7 +74,7 @@ class ConstraintManager:
         try:
             cur.execute(sql, params)
         except Exception as e:
-            logger.error(f"SQL falhou: {sql[:120]}... → {e}")
+            logger.error(f"SQL falhou: {sql[:120]}... -> {e}")
             raise
 
     # ─── consultas de metadados ─────────────────────────────
@@ -232,8 +232,8 @@ class ConstraintManager:
             # 1) FKs de tabelas filhas que nos referenciam
             # Agrupadas por constraint para suportar FKs compostas (multi-coluna)
             rows = self._q_foreign_keys_referencing_us(cur)
-            logger.info(f"  FKs filhas (outras tabelas → esta): {len(rows)} colunas")
-            fk_child: dict = {}   # (conname, cschema, ctable) → info
+            logger.info(f"  FKs filhas (outras tabelas -> esta): {len(rows)} colunas")
+            fk_child: dict = {}   # (conname, cschema, ctable) -> info
             for row in rows:
                 conname, cschema, ctable, ccol, pcol, urule, drule, _pos = row
                 key = (conname, cschema, ctable)
@@ -256,15 +256,15 @@ class ConstraintManager:
                 self.dropped_objects.append(DroppedObject(
                     'foreign_key_child', f'{cschema}.{ctable}.{conname}',
                     create, drop))
-                logger.debug(f"    FK child: {conname} ({child_cols}) → ({parent_cols})")
+                logger.debug(f"    FK child: {conname} ({child_cols}) -> ({parent_cols})")
 
             logger.info(f"  FKs filhas agrupadas: {len(fk_child)} constraints")
 
             # 2) FKs próprias da tabela destino
             # Agrupadas por constraint para suportar FKs compostas (multi-coluna)
             rows = self._q_own_foreign_keys(cur)
-            logger.info(f"  FKs próprias (esta tabela → outras): {len(rows)} colunas")
-            fk_own: dict = {}   # (conname, rschema, rtable) → info
+            logger.info(f"  FKs próprias (esta tabela -> outras): {len(rows)} colunas")
+            fk_own: dict = {}   # (conname, rschema, rtable) -> info
             for row in rows:
                 conname, ccol, rschema, rtable, rcol, urule, drule, _pos = row
                 key = (conname, rschema, rtable)
@@ -286,7 +286,7 @@ class ConstraintManager:
                           f'ON UPDATE {info["urule"]} ON DELETE {info["drule"]};')
                 self.dropped_objects.append(DroppedObject(
                     'foreign_key_own', conname, create, drop))
-                logger.debug(f"    FK own: {conname} ({child_cols}) → {rtable}({parent_cols})")
+                logger.debug(f"    FK own: {conname} ({child_cols}) -> {rtable}({parent_cols})")
 
             logger.info(f"  FKs próprias agrupadas: {len(fk_own)} constraints")
 
@@ -446,10 +446,10 @@ class ConstraintManager:
             for obj in self.dropped_objects:
                 try:
                     cur.execute(obj.drop_sql)
-                    logger.info(f"  ✕ {obj.obj_type:25s} → {obj.obj_name}")
+                    logger.info(f"  ✕ {obj.obj_type:25s} -> {obj.obj_name}")
                     ok += 1
                 except Exception as e:
-                    logger.warning(f"  ⚠ {obj.obj_type:25s} → {obj.obj_name}: {e}")
+                    logger.warning(f"  ⚠ {obj.obj_type:25s} -> {obj.obj_name}: {e}")
             # Otimizações
             cur.execute("SET synchronous_commit = off")
             cur.execute("SET jit = off")
@@ -476,10 +476,10 @@ class ConstraintManager:
                         continue
                     try:
                         cur.execute(obj.create_sql)
-                        logger.info(f"  ✓ {obj.obj_type:25s} → {obj.obj_name}")
+                        logger.info(f"  ✓ {obj.obj_type:25s} -> {obj.obj_name}")
                         ok += 1
                     except Exception as e:
-                        logger.error(f"  ✗ {obj.obj_type:25s} → {obj.obj_name}: {e}")
+                        logger.error(f"  ✗ {obj.obj_type:25s} -> {obj.obj_name}: {e}")
 
             # Restaurar e analisar
             cur.execute("SET synchronous_commit = on")

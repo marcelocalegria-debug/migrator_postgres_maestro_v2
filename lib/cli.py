@@ -71,13 +71,32 @@ class MaestroCLI:
             except Exception:
                 pass
 
+    def display_warning_banner(self):
+        warning_text = (
+            "[bold red]**** ATENÇÃO!! ****[/bold red]\n\n"
+            "[bold yellow]Processos em Background:[/bold yellow] Ao interromper o Maestro com Ctrl+C ou /quit, "
+            "os subprocessos (Popen) podem continuar rodando como 'órfãos' no Windows.\n"
+            "[bold cyan]Recomendação:[/bold cyan] Antes de executar um novo /run, verifique no Gerenciador de Tarefas "
+            "se ainda existem processos [bold]python.exe[/bold] ativos consumindo CPU.\n\n"
+            "[bold red]Risco de Duplicação:[/bold red]\n"
+            " • O sistema é reiniciável através dos checkpoints (last_pk_value/last_db_key) salvos no SQLite.\n"
+            " • [bold underline]PERIGO:[/bold underline] Se você executar /run enquanto os processos anteriores ainda estiverem rodando, "
+            "você terá duas instâncias tentando migrar as mesmas tabelas. Isso causará erros de conexão, violação de PK no PostgreSQL ou, "
+            "pior, [bold]duplicação de dados[/bold] caso a tabela não tenha PK definida.\n\n"
+            "[bold green]=> Ação Correta:[/bold green] Se interromper o Maestro, [bold]encerre manualmente os processos de migração antigos[/bold] "
+            "antes de entrar novamente e usar /run ou /resume. Quando você voltar, o migrador saberá exatamente de onde continuar."
+        )
+        self.console.print(Panel(warning_text, border_style="red", title="[blink red]ALERTA DE SEGURANÇA[/blink red]"))
+
     def display_welcome(self):
         self.console.print(Panel.fit(
-            "[bold blue]MAESTRO V2[/bold blue] - Orquestrador de Migração Firebird 3 → PostgreSQL 18+",
+            "[bold blue]MAESTRO V2[/bold blue] - Orquestrador de Migração Firebird 3 -> PostgreSQL 18+",
             subtitle="Baseado no Plano de Implementação"
         ))
         if self.current_seq:
             self.console.print(f"[dim]Auto-resume: Migração [bold cyan]{self.current_seq}[/bold cyan] carregada automaticamente.[/dim]\n")
+        
+        self.display_warning_banner()
 
     def run(self):
         self.display_welcome()
@@ -100,6 +119,7 @@ class MaestroCLI:
                     args = cmd_parts[1:]
                     
                     if cmd == "/quit":
+                        self.display_warning_banner()
                         break
                     elif cmd == "/help":
                         self.show_help()
@@ -127,6 +147,7 @@ class MaestroCLI:
             except KeyboardInterrupt:
                 continue
             except EOFError:
+                self.display_warning_banner()
                 break
         
         self.console.print("[blue]Encerrando Maestro. Até logo![/blue]")

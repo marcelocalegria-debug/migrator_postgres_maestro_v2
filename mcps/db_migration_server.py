@@ -2,6 +2,9 @@ import yaml
 import fdb
 import psycopg2
 import os
+import subprocess
+import sys
+import glob
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
@@ -23,21 +26,17 @@ if os.name == 'nt':
                 pass
 
 # Inicializa o servidor MCP
-mcp = FastMCP("Migracao_DB_MCP")
+mcp = FastMCP("Migracao_DB_Safe_Server")
 
 def load_config():
     """Lê o arquivo de configuração YAML dinamicamente."""
-    # 1. Tenta via variável de ambiente (Obrigatório se estiver rodando via Agente ADK)
     env_path = os.getenv("MIGRATION_CONFIG_PATH")
     if env_path:
         p = Path(env_path)
         if p.exists():
             with open(p, "r", encoding="utf-8") as file:
                 return yaml.safe_load(file)
-        else:
-            raise FileNotFoundError(f"Variavel MIGRATION_CONFIG_PATH aponta para arquivo inexistente: {env_path}")
 
-    # 2. Tenta no diretório atual (Fallback para uso manual)
     paths_to_try = [
         Path("config.yaml"),
         Path(__file__).parent.parent / "config.yaml"
@@ -48,231 +47,127 @@ def load_config():
             with open(p, "r", encoding="utf-8") as file:
                 return yaml.safe_load(file)
                 
-    raise FileNotFoundError("Arquivo config.yaml não encontrado. Defina MIGRATION_CONFIG_PATH para a pasta correta.")
+    raise FileNotFoundError("Arquivo config.yaml não encontrado.")
 
-# ─── Charset Helpers ──────────────────────────────────────────────────────────
-_CONFIG_CHARSET_TO_FB = {
-    'iso-8859-1': 'ISO8859_1', 'iso8859-1': 'ISO8859_1',
-    'iso_8859-1': 'ISO8859_1', 'latin1':    'ISO8859_1',
-    'latin-1':    'ISO8859_1', 'win1252':   'WIN1252',
-    'windows-1252': 'WIN1252', 'cp1252':    'WIN1252',
-    'utf-8':      'UTF8',      'utf8':      'UTF8',
-}
-
-def _fb_charset_for_connect(raw: str) -> str:
-    if not raw: return 'WIN1252'
-    return _CONFIG_CHARSET_TO_FB.get(raw.lower(), raw.upper())
-
-def get_firebird_connection():
-    """Retorna uma conexão ativa com o Firebird."""
+def get_safe_fb_connection():
+    """Conexão Firebird RESTRITA (Audit/ReadOnly)."""
     config = load_config()['firebird']
-    charset = _fb_charset_for_connect(config.get('charset', 'WIN1252'))
+    # OBRIGATÓRIO usar usuário de auditoria
+    user = config.get('audit_user', 'MIGRATION_AUDIT')
+    password = config.get('audit_password', 'migra_audit_123')
+    
     return fdb.connect(
         host=config['host'],
         port=config.get('port', 3050),
         database=config['database'],
-        user=config['user'],
-        password=config['password'],
-        charset=charset
+        user=user,
+        password=password,
+        charset='WIN1252'
     )
 
-def get_postgres_connection():
-    """Retorna uma conexão ativa com o PostgreSQL."""
+def get_safe_pg_connection():
+    """Conexão PostgreSQL RESTRITA (Audit/ReadOnly)."""
     cfg_data = load_config()
     config = cfg_data.get('postgresql') or cfg_data.get('postgres')
-    if not config:
-        raise ValueError("Seção 'postgresql' ou 'postgres' não encontrada no config.")
-        
+    
+    # OBRIGATÓRIO usar usuário de auditoria
+    user = config.get('audit_user', 'migration_audit')
+    password = config.get('audit_password', 'migra_audit_123')
+    
     return psycopg2.connect(
         host=config['host'],
         port=config.get('port', 5432),
         dbname=config['database'],
-        user=config['user'],
-        password=config['password'],
-        options=f"-c search_path={config.get('schema', 'public')}"
+        user=user,
+        password=password
     )
 
-# =====================================================================
-# AS FERRAMENTAS (TOOLS) QUE O AGENTE IA VAI ENXERGAR
-# =====================================================================
-
 @mcp.tool()
-def test_connections() -> str:
-    """Testa se as conexões com Firebird e PostgreSQL estão ativas."""
-    results = []
+def check_migration_logs(lines: int = 50) -> str:
+    """Verifica os últimos logs da migração em busca de erros."""
+    log_pattern = "logs/*.log"
+    files = sorted(glob.glob(log_pattern), key=os.path.getmtime, reverse=True)
     
-    # Teste Firebird
+    if not files:
+        return "Nenhum arquivo de log encontrado na pasta /logs."
+    
+    latest_log = files[0]
     try:
-        fb_conn = get_firebird_connection()
-        results.append("Firebird: Conexão OK.")
-        fb_conn.close()
-    except Exception as e:
-        results.append(f"Firebird: Falha - {str(e)}")
-
-    # Teste Postgres
-    try:
-        pg_conn = get_postgres_connection()
-        results.append("PostgreSQL: Conexão OK.")
-        pg_conn.close()
-    except Exception as e:
-        results.append(f"PostgreSQL: Falha - {str(e)}")
-
-    return "\n".join(results)
-
-@mcp.tool()
-def get_firebird_table_schema(table_name: str) -> str:
-    """
-    Busca os metadados (colunas e tipos) de uma tabela no Firebird.
-    Use esta ferramenta para entender a origem antes de migrar.
-    """
-    query = f"""
-        SELECT 
-            r.RDB$FIELD_NAME AS field_name,
-            f.RDB$FIELD_TYPE AS field_type,
-            f.RDB$FIELD_LENGTH AS field_length
-        FROM RDB$RELATION_FIELDS r
-        LEFT JOIN RDB$FIELDS f ON r.RDB$FIELD_SOURCE = f.RDB$FIELD_NAME
-        WHERE r.RDB$RELATION_NAME = '{table_name.upper()}'
-    """
-    try:
-        conn = get_firebird_connection()
-        cur = conn.cursor()
-        cur.execute(query)
-        rows = cur.fetchall()
-        conn.close()
-        
-        if not rows:
-            return f"Tabela '{table_name}' não encontrada no Firebird."
+        with open(latest_log, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.readlines()
+            last_lines = content[-lines:]
+            errors = [line for line in last_lines if "ERROR" in line.upper() or "TRACEBACK" in line.upper() or "EXCEPTION" in line.upper()]
             
-        # Formata o retorno para o LLM ler facilmente
-        schema_text = f"Schema Firebird da tabela {table_name}:\n"
-        for row in rows:
-            schema_text += f"- Coluna: {row[0].strip()}, Tipo Interno: {row[1]}, Tamanho: {row[2]}\n"
-        return schema_text
+            result = f"Arquivo: {latest_log}\n"
+            if errors:
+                result += "ERROS ENCONTRADOS:\n" + "".join(errors)
+            else:
+                result += "Nenhum erro óbvio nas últimas linhas."
+            return result
     except Exception as e:
-        return f"Erro ao ler schema do Firebird: {str(e)}"
+        return f"Erro ao ler log: {e}"
 
 @mcp.tool()
-def count_firebird_tables() -> str:
-    """Conta o número total de tabelas de usuário no Firebird."""
-    query = "SELECT count(*) FROM RDB$RELATIONS WHERE RDB$SYSTEM_FLAG = 0 AND RDB$VIEW_BLR IS NULL"
+def run_count_comparison() -> str:
+    """Executa o script de comparação de contagem entre Firebird e Postgres."""
     try:
-        conn = get_firebird_connection()
+        result = subprocess.run([sys.executable, "compara_cont_fb2pg.py"], capture_output=True, text=True)
+        return f"Saída do Comparador:\n{result.stdout}\n{result.stderr}"
+    except Exception as e:
+        return f"Erro ao executar comparador: {e}"
+
+@mcp.tool()
+def generate_migration_report() -> str:
+    """Gera o relatório HTML de comparação de estrutura."""
+    try:
+        result = subprocess.run([sys.executable, "gera_relatorio_compara_estrutura_fb2pg_html.py"], capture_output=True, text=True)
+        return f"Relatório gerado com sucesso.\nSaída: {result.stdout}"
+    except Exception as e:
+        return f"Erro ao gerar relatório: {e}"
+
+@mcp.tool()
+def open_html_report() -> str:
+    """Tenta abrir o último relatório HTML gerado no navegador."""
+    html_files = sorted(glob.glob("*.html"), key=os.path.getmtime, reverse=True)
+    if not html_files:
+        return "Nenhum arquivo HTML encontrado."
+    
+    latest_html = html_files[0]
+    try:
+        if os.name == 'nt':
+            os.startfile(latest_html)
+            return f"Relatório {latest_html} aberto no navegador."
+        return f"Arquivo encontrado: {latest_html}. (Comando 'open' não disponível neste OS)"
+    except Exception as e:
+        return f"Erro ao abrir arquivo: {e}"
+
+@mcp.tool()
+def get_firebird_table_count_safe(table_name: str) -> str:
+    """Conta registros no Firebird usando conexão segura."""
+    try:
+        conn = get_safe_fb_connection()
         cur = conn.cursor()
-        cur.execute(query)
+        cur.execute(f"SELECT count(*) FROM {table_name.upper()}")
         count = cur.fetchone()[0]
         conn.close()
-        return f"Total de tabelas de usuário no Firebird: {count}"
+        return f"Tabela {table_name.upper()}: {count} registros."
     except Exception as e:
-        return f"Erro ao contar tabelas no Firebird: {str(e)}"
+        return f"Erro (ReadOnly): {e}"
 
 @mcp.tool()
-def get_firebird_table_count(table_name: str) -> str:
-    """Retorna o número de registros (count) de uma tabela no Firebird."""
-    query = f"SELECT count(*) FROM {table_name.upper()}"
+def execute_readonly_sql_postgres(sql: str) -> str:
+    """Executa SQL SELECT no Postgres usando conexão segura."""
+    if "SELECT" not in sql.upper():
+        return "Erro: Apenas comandos SELECT são permitidos por segurança."
     try:
-        conn = get_firebird_connection()
-        cur = conn.cursor()
-        cur.execute(query)
-        count = cur.fetchone()[0]
-        conn.close()
-        return f"Tabela {table_name.upper()} no Firebird possui {count:,} registros."
-    except Exception as e:
-        return f"Erro ao contar registros na tabela {table_name} do Firebird: {str(e)}"
-
-@mcp.tool()
-def execute_firebird_sql(sql: str) -> str:
-    """
-    Executa um comando SQL (apenas DDL ou SELECT) no Firebird.
-    Use para investigar dados ou metadados na origem.
-    """
-    sql_upper = sql.upper().strip()
-    # Guardrail básico de segurança
-    forbidden = ["DROP DATABASE", "DELETE FROM", "TRUNCATE", "UPDATE ", "DROP TABLE"]
-    for word in forbidden:
-        if word in sql_upper:
-            return f"ERRO DE SEGURANÇA: O comando '{word}' não é permitido via MCP no Firebird."
-            
-    try:
-        conn = get_firebird_connection()
+        conn = get_safe_pg_connection()
         cur = conn.cursor()
         cur.execute(sql)
-        
-        if sql_upper.startswith("SELECT"):
-            # Limita a 50 linhas para não explodir o contexto
-            rows = cur.fetchmany(50)
-            desc = [d[0] for d in cur.description]
-            cur.close()
-            conn.close()
-            return f"Resultado (limitado a 50 linhas):\nColunas: {desc}\nDados: {str(rows)}"
-            
-        conn.commit()
-        cur.close()
+        rows = cur.fetchmany(100)
         conn.close()
-        return "Comando SQL executado com sucesso no Firebird."
+        return str(rows)
     except Exception as e:
-        return f"Erro ao executar SQL no Firebird: {str(e)}"
+        return f"Erro (ReadOnly): {e}"
 
-@mcp.tool()
-def get_postgres_table_schema(table_name: str) -> str:
-    """
-    Busca os metadados (colunas e tipos) de uma tabela no PostgreSQL.
-    Use esta ferramenta para comparar com o Firebird.
-    """
-    query = """
-        SELECT column_name, data_type, character_maximum_length, is_nullable
-        FROM information_schema.columns
-        WHERE table_name = %s
-        ORDER BY ordinal_position
-    """
-    try:
-        conn = get_postgres_connection()
-        cur = conn.cursor()
-        cur.execute(query, (table_name.lower(),))
-        rows = cur.fetchall()
-        conn.close()
-        
-        if not rows:
-            return f"Tabela '{table_name}' não encontrada no PostgreSQL."
-            
-        schema_text = f"Schema PostgreSQL da tabela {table_name}:\n"
-        for row in rows:
-            schema_text += f"- Coluna: {row[0]}, Tipo: {row[1]}, Tamanho: {row[2]}, Nullable: {row[3]}\n"
-        return schema_text
-    except Exception as e:
-        return f"Erro ao ler schema do PostgreSQL: {str(e)}"
-
-@mcp.tool()
-def execute_postgres_sql(sql: str) -> str:
-    """
-    Executa um comando SQL (apenas DDL ou SELECT) no PostgreSQL.
-    Use para aplicar correções de schema (ALTER TABLE) sugeridas.
-    """
-    sql_upper = sql.upper().strip()
-    # Guardrail básico de segurança
-    forbidden = ["DROP DATABASE", "DELETE FROM", "TRUNCATE", "UPDATE ", "DROP TABLE"]
-    for word in forbidden:
-        if word in sql_upper:
-            return f"ERRO DE SEGURANÇA: O comando '{word}' não é permitido via MCP."
-            
-    try:
-        conn = get_postgres_connection()
-        conn.autocommit = True
-        cur = conn.cursor()
-        cur.execute(sql)
-        
-        if sql_upper.startswith("SELECT"):
-            rows = cur.fetchall()
-            cur.close()
-            conn.close()
-            return f"Resultado do SELECT:\n{str(rows)}"
-            
-        cur.close()
-        conn.close()
-        return "Comando SQL executado com sucesso."
-    except Exception as e:
-        return f"Erro ao executar SQL no PostgreSQL: {str(e)}"
-
-# Ponto de entrada exigido para MCP via stdio
 if __name__ == "__main__":
     mcp.run()

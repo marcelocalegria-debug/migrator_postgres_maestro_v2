@@ -2,7 +2,7 @@
 """
 migrator_log_eventos.py
 ========================
-Migra LOG_EVENTOS (Firebird 3 → PostgreSQL) em N threads paralelas.
+Migra LOG_EVENTOS (Firebird 3 -> PostgreSQL) em N threads paralelas.
 
 LOG_EVENTOS não tem PK nem FK — o particionamento usa RDB$DB_KEY,
 o ponteiro físico de linha do Firebird (8 bytes, único, ordenável).
@@ -19,10 +19,10 @@ Uso:
     python migrator_log_eventos.py --generate-scripts-only
 
 Arquivos gerados:
-    migration_state_log_eventos.db          → monitor.py (progresso agregado)
-    migration_state_log_eventos_tN.db       → checkpoint individual por thread
-    migration_log_eventos_tN.log            → log individual por thread
-    migration_log_eventos_parallel.log      → log do orquestrador
+    migration_state_log_eventos.db          -> monitor.py (progresso agregado)
+    migration_state_log_eventos_tN.db       -> checkpoint individual por thread
+    migration_log_eventos_tN.log            -> log individual por thread
+    migration_log_eventos_parallel.log      -> log do orquestrador
     disable_constraints_log_eventos.sql
     enable_constraints_log_eventos.sql
     constraint_state_log_eventos.json
@@ -900,8 +900,8 @@ Uso:
   python migrator_log_eventos.py --generate-scripts-only
 
 Monitor:
-  python monitor.py               →  vê todas as threads automaticamente
-  python monitor.py --big-tables  →  filtra só as tabelas grandes
+  python monitor.py               ->  vê todas as threads automaticamente
+  python monitor.py --big-tables  ->  filtra só as tabelas grandes
         """)
     ap.add_argument('-c', '--config', default='config.yaml')
     ap.add_argument('-t', '--threads', type=int, default=8, metavar='N',
@@ -950,7 +950,7 @@ Monitor:
     }
 
     log.info('=' * 70)
-    log.info(f'  MIGRAÇÃO PARALELA: {SOURCE_TABLE} → {DEST_TABLE}')
+    log.info(f'  MIGRAÇÃO PARALELA: {SOURCE_TABLE} -> {DEST_TABLE}')
     log.info(f'  Threads       : {n_threads}')
     log.info(f'  Partição      : RDB$DB_KEY (sem PK)')
     log.info(f'  Batch         : {config["migration"].get("batch_size", 5000):,}')
@@ -1014,7 +1014,7 @@ Monitor:
         for i, r in enumerate(ranges):
             low_hex  = r['low'].hex()[:16] + '...' if r['low'] else '?'
             high_hex = (r['high'].hex()[:16] + '...' if r['high'] else 'FIM')
-            log.info(f'  Thread {i}: DB_KEY [{low_hex} → {high_hex}]  '
+            log.info(f'  Thread {i}: DB_KEY [{low_hex} -> {high_hex}]  '
                      f'(~{r["rows"]:,} linhas)')
         return
 
@@ -1025,7 +1025,7 @@ Monitor:
     for i, r in enumerate(ranges):
         low_hex  = r['low'].hex()[:16] + '...' if r['low'] else '?'
         high_hex = (r['high'].hex()[:16] + '...' if r['high'] else 'FIM')
-        log.info(f'  Thread {i}: DB_KEY [{low_hex} → {high_hex}]  '
+        log.info(f'  Thread {i}: DB_KEY [{low_hex} -> {high_hex}]  '
                  f'(~{r["rows"]:,} linhas)')
 
     # Detectar resume

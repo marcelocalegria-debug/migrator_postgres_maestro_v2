@@ -76,6 +76,11 @@ class MigrationAIAgent:
         os.environ["MIGRATION_CONFIG_PATH"] = str(self.project_path / "config.yaml")
 
         # 1. Configurar o Modelo via OpenRouter usando LiteLLM no ADK
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        if not api_key or api_key.startswith("#"):
+            self.model = None
+            return
+
         raw_model_name = os.getenv("MODEL", "moonshotai/kimi-k2.5")
         self.model_id = f"openrouter/{raw_model_name}" if not raw_model_name.startswith("openrouter/") else raw_model_name
         
@@ -84,7 +89,7 @@ class MigrationAIAgent:
             with contextlib.redirect_stdout(fnull):
                 self.model = LiteLlm(
                     model=self.model_id,
-                    api_key=os.getenv("OPENROUTER_API_KEY"),
+                    api_key=api_key,
                     api_base=os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1")
                 )
 
@@ -146,20 +151,18 @@ class MigrationAIAgent:
 
     def _build_agent(self) -> Agent:
         """Define o comportamento, as ferramentas e a identidade do agente."""
-        instruction = f"""Você é um Engenheiro de Dados e DBA Especialista atuando como Agente de Migração.
-Seu objetivo principal é auxiliar na migração de estruturas e dados do Firebird para o PostgreSQL 18.
+        instruction = f"""Você é um Engenheiro de Dados especialista em migração Firebird -> PostgreSQL.
+PROJETO: {self.project_path.name}
 
-PROJETO ATUAL: {self.project_path.name}
+DIRETRIZES DE RESPOSTA:
+1. Seja EXTREMAMENTE CONCISO. Use tabelas para dados e blocos de código para SQL.
+2. Foco exclusivo em migração (schema, dados, performance, constraints). 
+3. Não responda sobre assuntos fora do escopo de migração de banco de dados.
+4. Se uma ferramenta falhar ou der timeout, informe o erro técnico brevemente e sugira o próximo passo manual.
 
-Você tem acesso a servidores MCP para consultar esquemas, ler logs de erros da aplicação Python 
-e usar skills de conversão e regras de negócio.
-
-{self._get_skills_instructions()}
-
-Diretrizes:
-1. Sempre verifique as regras de conversão antes de sugerir um script.
-2. Ao receber um erro, utilize as ferramentas para ler o log antes de dar um diagnóstico.
-3. Retorne soluções focadas, preferencialmente com código SQL/Python estruturado.
+CONTEXTO TÉCNICO:
+- Firebird 3.0 (WIN1252) -> PostgreSQL 18+ (UTF8/LATIN1).
+- O processo utiliza COPY para alta performance.
 """
         return Agent(
             name="FirebirdToPostgresAgent",
@@ -172,6 +175,9 @@ Diretrizes:
         """
         Interage com o agente usando a API assíncrona do ADK Runner.
         """
+        if not self.model:
+            return "⚠️ Funcionalidade de Agente IA desativada: OPENROUTER_API_KEY não configurada ou inválida no .env."
+
         try:
             full_response = ""
             user_id = "default_user"
@@ -190,7 +196,9 @@ Diretrizes:
             
             return full_response.strip()
         except Exception as e:
-            return f"-- Falha na execução do Agente ADK: {str(e)} --"
+            if "tool_call_id" in str(e):
+                return "Ocorreu um erro de sincronização nas ferramentas. Por favor, repita a pergunta."
+            return f"-- Agente Indisponível: {str(e)} --"
 
 if __name__ == "__main__":
     async def chat_loop():

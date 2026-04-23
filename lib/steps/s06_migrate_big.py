@@ -65,8 +65,23 @@ class MigrateBigStep(StepBase):
             p = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT)
             processes.append((table, p, log_f))
 
-        # 3. Aguarda todos finalizarem
-        print(f"Monitorando {len(processes)} processos de Big Tables...")
+        # 3. Inicia Migrador de Tabelas Pequenas (Paralelo)
+        print(f"Iniciando Tabelas Pequenas em paralelo...")
+        small_cmd = [
+            sys.executable, 'migrator_smalltables_v2.py',
+            '--config', str(config_path.absolute()),
+            '--small-tables',
+            '--master-db', str(master_db.absolute()),
+            '--migration-id', str(self.migration_id),
+            '--work-dir', str(mig_dir.absolute()),
+            '--workers', str(self.config.get('migration', {}).get('parallel_workers', 4))
+        ]
+        log_f_small = open(mig_dir / "logs" / "migrate_small.stdout.log", "w")
+        p_small = subprocess.Popen(small_cmd, stdout=log_f_small, stderr=subprocess.STDOUT)
+        processes.append(("SMALL_TABLES", p_small, log_f_small))
+
+        # 4. Aguarda todos finalizarem
+        print(f"Monitorando {len(processes)} processos (Big + Small Tables)...")
         success = True
         
         # Pequeno loop de monitoramento simples

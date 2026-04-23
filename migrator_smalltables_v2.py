@@ -63,7 +63,7 @@ WORK_DIR.mkdir(exist_ok=True)
 LOG_DIR.mkdir(exist_ok=True)
 
 # ═══════════════════════════════════════════════════════════════
-#  MAPEAMENTO DE TIPOS FIREBIRD → POSTGRESQL
+#  MAPEAMENTO DE TIPOS FIREBIRD -> POSTGRESQL
 # ═══════════════════════════════════════════════════════════════
 
 _FB = {
@@ -338,8 +338,8 @@ class FirebirdToPgMigrator:
             futures = {pool.submit(_worker_migrate_table, a): a for a in args_list}
             for f in as_completed(futures):
                 res = f.result(); completed += 1
-                if res['status'] == 'completed': self.log.info(f"  ✓ [{res['table']}] {res['rows_migrated']:,} linhas | {completed}/{len(pending)}")
-                else: self.log.error(f"  ✗ [{res['table']}] FALHOU: {res['error']}")
+                if res['status'] == 'completed': self.log.info(f"  OK [{res['table']}] {res['rows_migrated']:,} linhas | {completed}/{len(pending)}")
+                else: self.log.error(f"  FAIL [{res['table']}] FALHOU: {res['error']}")
 
 def main():
     p = argparse.ArgumentParser()

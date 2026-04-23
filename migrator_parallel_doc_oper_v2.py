@@ -2,7 +2,7 @@
 """
 migrator_parallel_doc_oper.py
 ==============================
-Migra DOCUMENTO_OPERACAO (Firebird 3 → PostgreSQL) em N threads paralelas.
+Migra DOCUMENTO_OPERACAO (Firebird 3 -> PostgreSQL) em N threads paralelas.
 
 Particionamento por range de NU_OPERACAO (chave líder da PK composta).
 Cada thread migra um slice com checkpoint independente e log próprio.
@@ -19,10 +19,10 @@ Uso:
     python migrator_parallel_doc_oper.py --threads 4 --generate-scripts-only
 
 Arquivos gerados:
-    migration_state_documento_operacao.db          → monitor.py (progresso agregado)
-    migration_state_documento_operacao_tN.db       → checkpoint individual por thread
-    migration_documento_operacao_tN.log            → log individual por thread
-    migration_documento_operacao_parallel.log      → log do orquestrador
+    migration_state_documento_operacao.db          -> monitor.py (progresso agregado)
+    migration_state_documento_operacao_tN.db       -> checkpoint individual por thread
+    migration_documento_operacao_tN.log            -> log individual por thread
+    migration_documento_operacao_parallel.log      -> log do orquestrador
     disable_constraints_documento_operacao.sql
     enable_constraints_documento_operacao.sql
     constraint_state_documento_operacao.json
@@ -111,7 +111,7 @@ class ColumnMeta:
 
 
 # ═══════════════════════════════════════════════════════════════
-#  MAPEAMENTO DE TIPOS FIREBIRD → POSTGRESQL
+#  MAPEAMENTO DE TIPOS FIREBIRD -> POSTGRESQL
 # ═══════════════════════════════════════════════════════════════
 
 _FB_TYPES = {
@@ -454,7 +454,7 @@ class AggregatorThread(threading.Thread):
                 self.aggregate()
             except Exception:
                 pass
-            # wait() retorna imediatamente se shutdown for setado → saída limpa
+            # wait() retorna imediatamente se shutdown for setado -> saída limpa
             self.shutdown.wait(2.0)
         # Agregação final após todos os workers terminarem
         try:
@@ -758,9 +758,9 @@ class WorkerThread(threading.Thread):
     def run(self):
         cfg_m      = self.config['migration']
         batch_size = cfg_m.get('batch_size', 5000)
-        range_desc = (f'{self.range_start} → ∞'
+        range_desc = (f'{self.range_start} -> ∞'
                       if self.is_last
-                      else f'{self.range_start} → {self.range_end} (excl.)')
+                      else f'{self.range_start} -> {self.range_end} (excl.)')
 
         self.log.info('=' * 64)
         self.log.info(f'  Thread {self.tid} | NU_OPERACAO: {range_desc}')
@@ -900,7 +900,7 @@ def _setup_main_logger(log_file: str) -> logging.Logger:
 
 def main():
     ap = argparse.ArgumentParser(
-        description=f'Migra {SOURCE_TABLE} → {DEST_TABLE} em paralelo (Firebird → PostgreSQL)',
+        description=f'Migra {SOURCE_TABLE} -> {DEST_TABLE} em paralelo (Firebird -> PostgreSQL)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
 Exemplos:
@@ -911,7 +911,7 @@ Exemplos:
   python migrator_parallel_doc_oper.py --threads 4 --generate-scripts-only
 
 Observabilidade:
-  python monitor.py   →  coluna "{DEST_TABLE}" mostra progresso agregado das N threads
+  python monitor.py   ->  coluna "{DEST_TABLE}" mostra progresso agregado das N threads
 
 Checkpoint/Resume:
   Se interrompido com Ctrl+C, cada thread salva seu ponto de parada.
@@ -972,7 +972,7 @@ Nota: não mude --threads entre execuções sem usar --reset.
     }
 
     log.info('=' * 70)
-    log.info(f'  MIGRAÇÃO PARALELA: {SOURCE_TABLE} → {DEST_TABLE}')
+    log.info(f'  MIGRAÇÃO PARALELA: {SOURCE_TABLE} -> {DEST_TABLE}')
     log.info(f'  Threads : {n_threads}')
     log.info(f'  Batch   : {config["migration"].get("batch_size", 5000):,}')
     log.info(f'  Modo    : {"COPY" if not args.use_insert else "INSERT"}')
@@ -1049,7 +1049,7 @@ Nota: não mude --threads entre execuções sem usar --reset.
                  f'(~{r["rows"]:,} linhas)')
 
     # ── TRUNCATE (somente em fresh start) ────────────────────
-    # Verifica se alguma thread tem checkpoint válido → resume
+    # Verifica se alguma thread tem checkpoint válido -> resume
     any_restart = False
     if not args.reset:
         for db_path in worker_db_paths:
