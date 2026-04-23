@@ -6,8 +6,9 @@ dist/
 wheels/
 *.egg-info
 *.log
-config.yaml
 testes/
+MIGRACAO_*/
+Reports/
 OLD/
 .claude/
 .vscode/
@@ -15,8 +16,7 @@ fb/
 # Virtual environments
 .venv
 .env
-config*.yaml
-config_*.yaml
+config.yaml
 *.json
 *.DOCKER
 *.html
