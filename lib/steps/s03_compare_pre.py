@@ -46,31 +46,39 @@ class ComparePreStep(StepBase):
 
     def run(self) -> bool:
         print("--- Comparando Estrutura (Pré-Migração) ---")
+        print("[INFO] Esta etapa pode demorar alguns minutos dependendo do número de tabelas e contagem de registros.")
+        
         mig_info = self.db.get_migration(self.migration_id)
         mig_dir = Path(f"MIGRACAO_{mig_info['seq']}")
         config_path = mig_dir / "config.yaml"
         
-        # Executa compara_estrutura_fb2pg.py
+        # Executa compara_estrutura_fb2pg.py com streaming de output
         cmd = [
             sys.executable, 'compara_estrutura_fb2pg.py',
-            '--config', str(config_path.absolute())
+            '--config', str(config_path.absolute()),
+            '--skip-count'
         ]
         
+        full_output = []
         try:
-            process = subprocess.run(
-                cmd, capture_output=True, text=True, check=False
+            # Usando Popen para ler o output linha a linha em tempo real
+            process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+                text=True, bufsize=1, encoding='utf-8', errors='replace'
             )
             
-            output = process.stdout
-            print(output)
+            if process.stdout:
+                for line in process.stdout:
+                    print(line, end='', flush=True)
+                    full_output.append(line)
+            
+            process.wait()
+            output = "".join(full_output)
             
             # Salva log
             log_path = mig_dir / "logs" / "compare_pre.log"
             with open(log_path, 'w', encoding='utf-8') as f:
                 f.write(output)
-                if process.stderr:
-                    f.write("\n--- STDERR ---\n")
-                    f.write(process.stderr)
 
             if process.returncode != 0:
                 print("[WARNING] Diferenças encontradas na estrutura.")

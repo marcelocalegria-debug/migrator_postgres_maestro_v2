@@ -424,7 +424,7 @@ def _pg_get_checks(conn, schema: str, table: str) -> Set[str]:
 # ─── Comparação de Estruturas ─────────────────────────────────────────────────
 
 def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str, 
-                       fb_name: str, pg_name: str) -> dict:
+                       fb_name: str, pg_name: str, skip_count: bool = False) -> dict:
     """
     Compara toda a estrutura de uma tabela entre Firebird e PostgreSQL.
     """
@@ -440,16 +440,17 @@ def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str,
     }
     
     # ─── Contagem ─────────────────────────────────────────────────────
-    try:
-        fb_count = _fb_count(fb_conn, fb_name)
-        pg_count = _pg_count(pg_conn, schema, pg_name)
-        
-        if fb_count != pg_count:
+    if not skip_count:
+        try:
+            fb_count = _fb_count(fb_conn, fb_name)
+            pg_count = _pg_count(pg_conn, schema, pg_name)
+            
+            if fb_count != pg_count:
+                result['count_ok'] = False
+                result['issues'].append(f"COUNT: FB={fb_count:,} vs PG={pg_count:,} (diff={pg_count-fb_count:+,})")
+        except Exception as e:
             result['count_ok'] = False
-            result['issues'].append(f"COUNT: FB={fb_count:,} vs PG={pg_count:,} (diff={pg_count-fb_count:+,})")
-    except Exception as e:
-        result['count_ok'] = False
-        result['issues'].append(f"COUNT: ERRO - {e}")
+            result['issues'].append(f"COUNT: ERRO - {e}")
     
     # ─── Primary Key ──────────────────────────────────────────────────
     try:
@@ -663,6 +664,7 @@ def main():
     parser.add_argument('--config', default='config.yaml', help='Caminho do config.yaml')
     parser.add_argument('--schema', default=None, help='Schema PostgreSQL (default: lido do config)')
     parser.add_argument('--verbose', action='store_true', help='Mostrar progresso detalhado')
+    parser.add_argument('--skip-count', action='store_true', help='Pular a comparação de contagem de registros')
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -703,7 +705,7 @@ def main():
         if args.verbose or i % 50 == 0:
             print(f'  [{i:>4}/{total}] {key}')
         
-        result = _compare_structure(fb_conn, pg_conn, schema, key, fb_name, pg_name)
+        result = _compare_structure(fb_conn, pg_conn, schema, key, fb_name, pg_name, skip_count=args.skip_count)
         results.append(result)
 
     fb_conn.close()

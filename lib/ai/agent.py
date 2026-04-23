@@ -56,9 +56,25 @@ class MigrationAIAgent:
     Acessa ferramentas via MCP, usa OpenRouter e mantém memória persistente por sessão.
     """
 
-    def __init__(self, db_audit_path: str = "sqlite+aiosqlite:///migration_audit.db"):
-        self.db_audit_path = db_audit_path
+    def __init__(self, project_path: Optional[str] = None):
+        # 0. Define o diretório do projeto e banco de auditoria
+        self.root_dir = Path(__file__).parent.parent.parent
+        if project_path:
+            self.project_path = Path(project_path)
+        else:
+            # Tenta pegar da variável de ambiente ou usa a mais recente
+            env_proj = os.getenv("MIGRATION_PROJECT_PATH")
+            if env_proj:
+                self.project_path = Path(env_proj)
+            else:
+                migration_dirs = sorted(list(self.root_dir.glob("MIGRACAO_*")), reverse=True)
+                self.project_path = migration_dirs[0] if migration_dirs else self.root_dir
+
+        self.db_audit_path = f"sqlite+aiosqlite:///{self.project_path / 'migration_audit.db'}"
         
+        # Configura variável de ambiente para o MCP ler o config correto
+        os.environ["MIGRATION_CONFIG_PATH"] = str(self.project_path / "config.yaml")
+
         # 1. Configurar o Modelo via OpenRouter usando LiteLLM no ADK
         raw_model_name = os.getenv("MODEL", "moonshotai/kimi-k2.5")
         self.model_id = f"openrouter/{raw_model_name}" if not raw_model_name.startswith("openrouter/") else raw_model_name
@@ -95,18 +111,20 @@ class MigrationAIAgent:
         """
         tools = []
         
-        # [FIX] Usa o executável atual do Python e caminho absoluto para o MCP
-        # Localiza a raiz do projeto
-        root_dir = Path(__file__).parent.parent.parent
-        mcp_script = root_dir / "mcps" / "db_migration_server.py"
+        # Localiza o script do MCP
+        mcp_script = self.root_dir / "mcps" / "db_migration_server.py"
         
         firebird_postgres_mcp = McpToolset(
             connection_params=StdioConnectionParams(
                 server_params=StdioServerParameters(
                     command=sys.executable,
                     args=[str(mcp_script.absolute())],
-                    # Define explicitamente o env e cwd para o processo do MCP
-                    env={**os.environ, "PYTHONPATH": str(root_dir.absolute())}
+                    # Passa o caminho do projeto para o MCP
+                    env={
+                        **os.environ, 
+                        "PYTHONPATH": str(self.root_dir.absolute()),
+                        "MIGRATION_CONFIG_PATH": str(self.project_path / "config.yaml")
+                    }
                 )
             )
         )
@@ -114,13 +132,28 @@ class MigrationAIAgent:
         
         return tools
 
+    def _get_skills_instructions(self) -> str:
+        """Lê arquivos .md da pasta skills/ para adicionar às instruções do agente."""
+        skills_dir = self.root_dir / "skills"
+        skills_text = ""
+        if skills_dir.exists():
+            for skill_file in skills_dir.glob("*.md"):
+                with open(skill_file, "r", encoding="utf-8") as f:
+                    skills_text += f"\n\n--- SKILL: {skill_file.name} ---\n"
+                    skills_text += f.read()
+        return skills_text
+
     def _build_agent(self) -> Agent:
         """Define o comportamento, as ferramentas e a identidade do agente."""
-        instruction = """Você é um Engenheiro de Dados e DBA Especialista atuando como Agente de Migração.
+        instruction = f"""Você é um Engenheiro de Dados e DBA Especialista atuando como Agente de Migração.
 Seu objetivo principal é auxiliar na migração de estruturas e dados do Firebird para o PostgreSQL 18.
+
+PROJETO ATUAL: {self.project_path.name}
 
 Você tem acesso a servidores MCP para consultar esquemas, ler logs de erros da aplicação Python 
 e usar skills de conversão e regras de negócio.
+
+{self._get_skills_instructions()}
 
 Diretrizes:
 1. Sempre verifique as regras de conversão antes de sugerir um script.
@@ -159,20 +192,41 @@ Diretrizes:
             return f"-- Falha na execução do Agente ADK: {str(e)} --"
 
 if __name__ == "__main__":
-    async def main():
-        print("--- Iniciando Teste de Conexão (IA + MCP) ---")
-        agent = MigrationAIAgent()
-        print("Agente ADK e MCP vinculados com sucesso!")
+    async def chat_loop():
+        from rich.console import Console
+        from rich.prompt import Prompt
+        from rich.panel import Panel
         
-        session_id = "teste_unitario_conexao"
-        pergunta = "Olá! Por favor, teste as conexões com os bancos e depois me diga quantas tabelas de usuário existem no Firebird."
+        console = Console()
+        console.print(Panel("[bold cyan]Migration AI Agent - Chatbot Interativo[/bold cyan]"))
         
-        print(f"\nUsuário: {pergunta}")
-        print("Aguardando resposta da IA (processando ferramentas MCP)...")
+        # Listar projetos de migração
+        root_dir = Path(__file__).parent.parent.parent
+        migration_dirs = sorted([d for d in root_dir.glob("MIGRACAO_*") if d.is_dir()], reverse=True)
         
-        response = await agent.execute_task(session_id, pergunta)
-        
-        print(f"\nIA: {response}")
-        print("\n--- Teste Finalizado ---")
+        if not migration_dirs:
+            console.print("[red]Nenhum diretório MIGRACAO_???? encontrado![/red]")
+            return
 
-    asyncio.run(main())
+        choices = [d.name for d in migration_dirs]
+        console.print(f"Projetos encontrados: {', '.join(choices)}")
+        selected_migration = Prompt.ask("Selecione o projeto de migração", choices=choices, default=choices[0])
+        
+        project_path = root_dir / selected_migration
+        agent = MigrationAIAgent(project_path=str(project_path))
+        
+        console.print(f"\n[green]Agente carregado para {selected_migration}[/green]")
+        console.print("[dim]Digite 'sair' ou 'exit' para encerrar.[/dim]\n")
+        
+        session_id = f"chat_{selected_migration}"
+        
+        while True:
+            user_input = Prompt.ask("[bold blue]Você[/bold blue]")
+            if user_input.lower() in ["sair", "exit", "quit"]:
+                break
+                
+            console.print("[bold yellow]IA pensando...[/bold yellow]")
+            response = await agent.execute_task(session_id, user_input)
+            console.print(f"\n[bold green]IA:[/bold green] {response}\n")
+
+    asyncio.run(chat_loop())

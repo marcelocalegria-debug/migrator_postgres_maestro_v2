@@ -34,6 +34,14 @@ try:
     HAS_RICH = True
 except ImportError:
     HAS_RICH = False
+    # Fallback minimal definitions for type hints
+    class Table: pass
+    class Console: pass
+    class Panel: pass
+    class Live: pass
+    class Columns: pass
+    class Text: pass
+    box = None
 
 BASE_DIR = Path(__file__).parent
 WORK_DIR = BASE_DIR / 'work'

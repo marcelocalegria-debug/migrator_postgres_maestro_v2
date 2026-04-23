@@ -27,12 +27,20 @@ mcp = FastMCP("Migracao_DB_MCP")
 
 def load_config():
     """Lê o arquivo de configuração YAML dinamicamente."""
-    # 1. Tenta no diretório atual (CWD)
+    # 1. Tenta via variável de ambiente (Obrigatório se estiver rodando via Agente ADK)
+    env_path = os.getenv("MIGRATION_CONFIG_PATH")
+    if env_path:
+        p = Path(env_path)
+        if p.exists():
+            with open(p, "r", encoding="utf-8") as file:
+                return yaml.safe_load(file)
+        else:
+            raise FileNotFoundError(f"Variavel MIGRATION_CONFIG_PATH aponta para arquivo inexistente: {env_path}")
+
+    # 2. Tenta no diretório atual (Fallback para uso manual)
     paths_to_try = [
         Path("config.yaml"),
-        Path("MIGRACAO_0001/config.yaml"),
-        Path(__file__).parent.parent / "config.yaml",
-        Path(__file__).parent.parent / "MIGRACAO_0001" / "config.yaml"
+        Path(__file__).parent.parent / "config.yaml"
     ]
     
     for p in paths_to_try:
@@ -40,7 +48,7 @@ def load_config():
             with open(p, "r", encoding="utf-8") as file:
                 return yaml.safe_load(file)
                 
-    raise FileNotFoundError(f"Arquivo config.yaml não encontrado em nenhum dos locais: {[str(p) for p in paths_to_try]}")
+    raise FileNotFoundError("Arquivo config.yaml não encontrado. Defina MIGRATION_CONFIG_PATH para a pasta correta.")
 
 # ─── Charset Helpers ──────────────────────────────────────────────────────────
 _CONFIG_CHARSET_TO_FB = {
