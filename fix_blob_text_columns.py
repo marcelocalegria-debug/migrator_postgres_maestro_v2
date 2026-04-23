@@ -21,6 +21,33 @@ import os
 
 import yaml
 
+# ── Carregamento do fbclient.dll (Windows) ────────────────────────────────────
+if os.name == "nt" and hasattr(os, "add_dll_directory"):
+    try:
+        os.add_dll_directory(os.path.abspath(os.path.dirname(__file__) or "."))
+    except Exception:
+        pass
+
+import fdb
+
+if os.name == "nt":
+    _fb_paths = [
+        os.path.abspath(os.path.join(os.path.dirname(__file__) or ".", "fbclient.dll")),
+        r"C:\Program Files\Firebird\Firebird_3_0\fbclient.dll",
+        r"C:\Program Files\Firebird\Firebird_4_0\fbclient.dll",
+        r"C:\Program Files\Firebird\Firebird_5_0\fbclient.dll",
+        r"C:\Program Files\Firebird\Firebird_2_5\bin\fbclient.dll",
+        r"C:\Program Files (x86)\Firebird\Firebird_3_0\fbclient.dll",
+        r"C:\Program Files (x86)\Firebird\Firebird_2_5\bin\fbclient.dll",
+    ]
+    for _p in _fb_paths:
+        if os.path.exists(_p):
+            try:
+                fdb.load_api(_p)
+                break
+            except Exception:
+                pass
+
 # ── Colunas genuinamente binárias — NÃO converter para text ──────────
 BINARY_COLUMNS = {
     # (tabela, coluna) — colunas de imagem, dados binários brutos, tokens

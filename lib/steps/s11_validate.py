@@ -1,3 +1,4 @@
+import sys
 import subprocess
 from pathlib import Path
 from .base import StepBase
@@ -16,7 +17,7 @@ class ValidateStep(StepBase):
         # Vamos rodar para as tabelas configuradas no config.yaml.
         
         cmd = [
-            'python', 'PosMigracao_comparaChecksum_bytea.py',
+            sys.executable, 'PosMigracao_comparaChecksum_bytea.py',
             '--config', str(config_path.absolute()),
             '--all-tables' # Assumindo que adicionamos essa flag ou similar
         ]

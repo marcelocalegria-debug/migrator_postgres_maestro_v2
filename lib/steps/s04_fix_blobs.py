@@ -1,3 +1,4 @@
+import sys
 import subprocess
 import psycopg2
 from pathlib import Path
@@ -15,7 +16,7 @@ class FixBlobsStep(StepBase):
         
         # 1. Gera o script SQL
         cmd = [
-            'python', 'fix_blob_text_columns.py',
+            sys.executable, 'fix_blob_text_columns.py',
             '--config', str(config_path.absolute()),
             '--output', str(output_sql.absolute())
         ]
