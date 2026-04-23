@@ -31,8 +31,10 @@ if os.name == "nt" and hasattr(os, "add_dll_directory"):
 import fdb
 
 if os.name == "nt":
+    script_dir = os.path.dirname(os.path.abspath(__file__))
     _fb_paths = [
-        os.path.abspath(os.path.join(os.path.dirname(__file__) or ".", "fbclient.dll")),
+        os.path.join(script_dir, "fbclient.dll"),
+        os.path.abspath("fbclient.dll"),
         r"C:\Program Files\Firebird\Firebird_3_0\fbclient.dll",
         r"C:\Program Files\Firebird\Firebird_4_0\fbclient.dll",
         r"C:\Program Files\Firebird\Firebird_5_0\fbclient.dll",
@@ -40,13 +42,28 @@ if os.name == "nt":
         r"C:\Program Files (x86)\Firebird\Firebird_3_0\fbclient.dll",
         r"C:\Program Files (x86)\Firebird\Firebird_2_5\bin\fbclient.dll",
     ]
+    _loaded = False
+    _errors = []
     for _p in _fb_paths:
         if os.path.exists(_p):
             try:
                 fdb.load_api(_p)
+                _loaded = True
                 break
-            except Exception:
-                pass
+            except Exception as e:
+                _errors.append(f"Erro ao carregar de {_p}: {e}")
+    
+    if not _loaded:
+        # Tenta carregar sem caminho (pode estar no PATH)
+        try:
+            fdb.load_api("fbclient.dll")
+            _loaded = True
+        except Exception as e:
+            _errors.append(f"Erro ao carregar 'fbclient.dll' do PATH: {e}")
+
+    # Se ainda não carregou e estamos no Windows, fdb.connect vai falhar depois.
+    # Não vamos printar tudo agora para não sujar o log se funcionar via fdb.connect (improvável)
+    # Mas se houver erro depois, o usuário verá a exceção do fdb.
 
 # ── Colunas genuinamente binárias — NÃO converter para text ──────────
 BINARY_COLUMNS = {
