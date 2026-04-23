@@ -39,8 +39,11 @@ class FixBlobsStep(StepBase):
             print(f"Executando script de correção: {output_sql.name}...")
             pg = self.config.postgres
             conn = psycopg2.connect(
-                host=pg['host'], database=pg['database'],
-                user=pg['user'], password=pg['password']
+                host=pg['host'], 
+                port=pg.get('port', 5432),
+                database=pg['database'],
+                user=pg['user'], 
+                password=pg['password']
             )
             conn.autocommit = True
             cur = conn.cursor()

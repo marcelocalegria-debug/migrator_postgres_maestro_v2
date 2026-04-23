@@ -27,13 +27,14 @@ class ImportSchemaStep(StepBase):
         cmd = [
             'psql',
             '-h', pg['host'],
+            '-p', str(pg.get('port', 5432)),
             '-U', pg['user'],
             '-d', target_db,
             '-f', str(schema_path.absolute())
         ]
         
         try:
-            print(f"Executando: psql -h {pg['host']} -U {pg['user']} -d {target_db} -f schema.sql")
+            print(f"Executando: psql -h {pg['host']} -p {pg.get('port', 5432)} -U {pg['user']} -d {target_db} -f schema.sql")
             process = subprocess.run(
                 cmd, env=env, capture_output=True, text=True, check=False
             )

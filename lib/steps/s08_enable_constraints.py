@@ -26,8 +26,11 @@ class EnableConstraintsStep(StepBase):
 
             # 2. Conecta ao PostgreSQL
             conn = psycopg2.connect(
-                host=pg['host'], database=pg['database'],
-                user=pg['user'], password=pg['password']
+                host=pg['host'], 
+                port=pg.get('port', 5432),
+                database=pg['database'],
+                user=pg['user'], 
+                password=pg['password']
             )
             conn.autocommit = True
             cur = conn.cursor()

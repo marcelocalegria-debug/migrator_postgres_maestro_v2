@@ -177,6 +177,13 @@ class MaestroCLI:
         # 4. Carrega Configuração (do arquivo copiado para a pasta da migração)
         try:
             self.config = MigrationConfig(mig_dir / "config.yaml")
+            
+            # Validação V2: Verifica unificação dos configs
+            if not self.config.get('migration'):
+                self.console.print("[yellow]Aviso: Seção 'migration' ausente no config.yaml. Tabelas grandes podem ser duplicadas no smalltables.[/yellow]")
+            elif not self.config.get('migration').get('exclude_tables'):
+                self.console.print("[yellow]Aviso: 'exclude_tables' não encontrado em 'migration'. Certifique-se de excluir as tabelas grandes.[/yellow]")
+                
         except Exception as e:
             self.console.print(f"[red]Erro ao carregar configuração: {e}[/red]")
             return

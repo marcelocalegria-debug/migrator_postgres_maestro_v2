@@ -324,7 +324,7 @@ class FirebirdToPgMigrator:
         return tuple(out)
 
     def run_small_tables(self, n_workers: int = 4):
-        cfg_m = self.config['migration']
+        cfg_m = self.config.get('migration', {})
         exclude = {t.strip().upper() for t in cfg_m.get('exclude_tables', [])}
         fb_conn = self._fb_conn()
         cur = fb_conn.cursor(); cur.execute("SELECT TRIM(r.RDB$RELATION_NAME) FROM RDB$RELATIONS r WHERE r.RDB$SYSTEM_FLAG=0 AND r.RDB$VIEW_BLR IS NULL")

@@ -23,8 +23,11 @@ class CreateDatabaseStep(StepBase):
         try:
             # Conecta ao banco 'postgres' como superuser para criar o novo banco
             conn = psycopg2.connect(
-                host=pg['host'], database='postgres',
-                user=pg['user'], password=pg['password']
+                host=pg['host'], 
+                port=pg.get('port', 5432),
+                database='postgres',
+                user=pg['user'], 
+                password=pg['password']
             )
             conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = conn.cursor()
@@ -61,8 +64,11 @@ class CreateDatabaseStep(StepBase):
             
             # Reconecta agora no banco recém-criado para rodar os GRANTS e ALTERs
             conn_target = psycopg2.connect(
-                host=pg['host'], database=target_db,
-                user=pg['user'], password=pg['password']
+                host=pg['host'], 
+                port=pg.get('port', 5432),
+                database=target_db,
+                user=pg['user'], 
+                password=pg['password']
             )
             conn_target.autocommit = True
             cur_target = conn_target.cursor()

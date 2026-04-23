@@ -14,8 +14,11 @@ class DisableConstraintsStep(StepBase):
         try:
             # 1. Obter a lista de todas as tabelas no esquema destino
             conn = psycopg2.connect(
-                host=pg['host'], database=pg['database'],
-                user=pg['user'], password=pg['password']
+                host=pg['host'], 
+                port=pg.get('port', 5432),
+                database=pg['database'],
+                user=pg['user'], 
+                password=pg['password']
             )
             cur = conn.cursor()
             cur.execute("""

@@ -1,0 +1,52 @@
+# Configuração Unificada de Migração Firebird 3 -> PostgreSQL 18+
+
+# Conexão com o banco de dados de origem (Firebird)
+firebird:
+  host: "localhost"
+  port: 3050
+  database: "C:\\Caminho\\Para\\O\\BANCO.FDB"
+  user: "SYSDBA"
+  password: "masterkey"
+  charset: "win1252" # Opções: win1252, utf-8, none
+
+# Conexão com o banco de dados de destino (PostgreSQL)
+postgres:
+  host: "localhost"
+  port: 5432
+  database: "postgres"
+  schema: "public"
+  user: "postgres"
+  password: "password"
+
+# Configurações de performance do PostgreSQL para a sessão de carga
+performance:
+  work_mem: "256MB"
+  maintenance_work_mem: "1GB"    # [PERF] Acelera muito a criação de índices e PKs/FKs
+
+# Configurações de orquestração e comportamento da migração
+migration:
+  parallel_workers: 4         # Número de processos para tabelas pequenas
+  batch_size: 10000            # Linhas por batch no COPY do PostgreSQL
+  fetch_array_size: 10000      # [PERF] Buffer do cursor Firebird
+  max_retries: 3               # Tentativas em caso de erro de conexão
+  retry_delay_seconds: 3       # Espera entre tentativas
+  
+  # Lista de tabelas que NÃO devem ser processadas pelo migrator_smalltables.
+  # Estas tabelas são migradas individualmente ou por scripts especializados no Step 6 (MIGRATE_BIG).
+  exclude_tables:
+    - DOCUMENTO_OPERACAO
+    - LOG_EVENTOS
+    - HISTORICO_OPERACAO
+    - OCORRENCIA_SISAT
+    - OCORRENCIA
+    - NMOV
+    - OPERACAO_CREDITO
+    - PARCELASCTB
+    - PESSOA_PRETENDENTE
+    - CONTROLEVERSAO
+
+# Configurações de Logging
+logging:
+  level: "INFO"
+  console: true
+  # file: "logs/migration.log" # Opcional: Se omitido, o Maestro isola o log na pasta da migração

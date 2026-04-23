@@ -47,8 +47,11 @@ class PrecheckStep(StepBase):
         try:
             pg = self.config.postgres
             conn_pg = psycopg2.connect(
-                host=pg['host'], database='postgres',
-                user=pg['user'], password=pg['password']
+                host=pg['host'], 
+                port=pg.get('port', 5432),
+                database='postgres',
+                user=pg['user'], 
+                password=pg['password']
             )
             print("[OK] Conexão PostgreSQL (banco 'postgres') estabelecida.")
             conn_pg.close()

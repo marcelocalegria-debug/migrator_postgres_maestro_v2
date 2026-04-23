@@ -55,8 +55,11 @@ class SequencesStep(StepBase):
         sql_commands = []
         try:
             conn_pg = psycopg2.connect(
-                host=pg['host'], database=pg['database'],
-                user=pg['user'], password=pg['password']
+                host=pg['host'], 
+                port=pg.get('port', 5432),
+                database=pg['database'],
+                user=pg['user'], 
+                password=pg['password']
             )
             conn_pg.autocommit = True
             cur_pg = conn_pg.cursor()
