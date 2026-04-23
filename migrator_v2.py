@@ -73,160 +73,14 @@ if os.name == 'nt':
                 pass
 
 from pg_constraints import ConstraintManager
+from lib.state import StateManager, MigrationProgress
 
+# Configurações de diretório (serão sobrescritas se --work-dir for passado)
 BASE_DIR = Path(__file__).parent
 WORK_DIR = BASE_DIR / 'work'
 LOG_DIR  = BASE_DIR / 'logs'
 WORK_DIR.mkdir(exist_ok=True)
 LOG_DIR.mkdir(exist_ok=True)
-
-
-# ═══════════════════════════════════════════════════════════════
-#  ESTRUTURAS DE DADOS
-# ═══════════════════════════════════════════════════════════════
-
-@dataclass
-class MigrationProgress:
-    source_table: str = ""
-    dest_table: str = ""
-    total_rows: int = 0
-    rows_migrated: int = 0
-    rows_failed: int = 0
-    current_batch: int = 0
-    total_batches: int = 0
-    batch_size: int = 5000
-    last_pk_value: Any = None          # restart checkpoint
-    pk_columns: List[str] = field(default_factory=list)
-    use_db_key: bool = False           # fallback sem PK
-    last_db_key: bytes = None          # checkpoint RDB$DB_KEY
-    status: str = "idle"
-    started_at: Optional[str] = None
-    updated_at: Optional[str] = None
-    completed_at: Optional[str] = None
-    elapsed_seconds: float = 0.0
-    speed_rows_per_sec: float = 0.0
-    eta_seconds: Optional[float] = None
-    error_message: Optional[str] = None
-    constraints_disabled: bool = False
-    phase: str = "idle"
-
-    def to_dict(self):
-        d = asdict(self)
-        # bytes não são JSON-serializáveis
-        if isinstance(d.get('last_db_key'), (bytes, memoryview)):
-            d['last_db_key'] = d['last_db_key'].hex() if d['last_db_key'] else None
-        if isinstance(d.get('last_pk_value'), (bytes, memoryview)):
-            d['last_pk_value'] = d['last_pk_value'].hex()
-        return d
-
-    @classmethod
-    def from_dict(cls, d: dict) -> 'MigrationProgress':
-        valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
-        if isinstance(valid.get('last_db_key'), str):
-            valid['last_db_key'] = bytes.fromhex(valid['last_db_key'])
-        return cls(**valid)
-
-
-@dataclass
-class ColumnMeta:
-    name: str
-    fb_type_code: int
-    pg_type: str
-    is_blob: bool = False
-    blob_subtype: int = 0      # 0=binary, 1=text
-    fb_charset: str = 'NONE'
-    nullable: bool = True
-    position: int = 0
-
-
-# ═══════════════════════════════════════════════════════════════
-#  STATE MANAGER (SQLite)
-# ═══════════════════════════════════════════════════════════════
-
-class StateManager:
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-        self._init_db()
-
-    def _conn(self):
-        return sqlite3.connect(self.db_path, timeout=10)
-
-    def _init_db(self):
-        conn = self._conn()
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS migration_state (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                progress_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS migration_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                batch_number INTEGER,
-                rows_in_batch INTEGER,
-                total_rows INTEGER,
-                speed_rps REAL,
-                eta_seconds REAL,
-                message TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_log_ts ON migration_log(timestamp);
-        """)
-        conn.commit()
-        conn.close()
-
-    def save_progress(self, p: MigrationProgress):
-        conn = self._conn()
-        data = json.dumps(p.to_dict(), default=str)
-        now = datetime.now().isoformat()
-        conn.execute("""
-            INSERT INTO migration_state (id, progress_json, updated_at)
-            VALUES (1, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                progress_json = excluded.progress_json,
-                updated_at    = excluded.updated_at
-        """, (data, now))
-        conn.commit()
-        conn.close()
-
-    def load_progress(self) -> Optional[MigrationProgress]:
-        conn = self._conn()
-        row = conn.execute(
-            "SELECT progress_json FROM migration_state WHERE id=1"
-        ).fetchone()
-        conn.close()
-        if row:
-            return MigrationProgress.from_dict(json.loads(row[0]))
-        return None
-
-    def log_batch(self, batch, rows, total, speed, eta, msg=""):
-        conn = self._conn()
-        conn.execute("""
-            INSERT INTO migration_log
-                (timestamp, batch_number, rows_in_batch, total_rows,
-                 speed_rps, eta_seconds, message)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (datetime.now().isoformat(), batch, rows, total, speed, eta, msg))
-        conn.commit()
-        conn.close()
-
-    def get_recent(self, n=30) -> list:
-        conn = self._conn()
-        rows = conn.execute("""
-            SELECT timestamp, batch_number, rows_in_batch, total_rows,
-                   speed_rps, eta_seconds, message
-            FROM migration_log ORDER BY id DESC LIMIT ?
-        """, (n,)).fetchall()
-        conn.close()
-        return rows
-
-    def reset(self):
-        conn = self._conn()
-        conn.executescript("""
-            DELETE FROM migration_state;
-            DELETE FROM migration_log;
-        """)
-        conn.commit()
-        conn.close()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -398,15 +252,22 @@ def _copy_row_str(row: tuple, col_count: int) -> str:
 #  MIGRADOR
 # ═══════════════════════════════════════════════════════════════
 
-class FirebirdToPgMigrator:
-
     def __init__(self, config_path: str, override_batch_size: int = None,
                  use_insert: bool = False, override_table: str = None,
-                 override_log_file: str = None):
+                 override_log_file: str = None, master_db_path: str = None,
+                 work_dir: str = None, migration_id: int = None):
         self.config = self._load_config(config_path)
         if override_batch_size:
             self.config['migration']['batch_size'] = override_batch_size
         self.use_insert = use_insert  # True = execute_values, False = COPY
+
+        # Configuração de diretórios
+        global WORK_DIR, LOG_DIR
+        if work_dir:
+            WORK_DIR = Path(work_dir)
+            LOG_DIR = WORK_DIR / 'logs'
+            WORK_DIR.mkdir(exist_ok=True, parents=True)
+            LOG_DIR.mkdir(exist_ok=True, parents=True)
 
         # --table: sobrescreve lista de tabelas do config
         if override_table:
@@ -417,9 +278,16 @@ class FirebirdToPgMigrator:
                 'state_db': str(WORK_DIR / f'migration_state_{table.lower()}.db'),
             }
 
+        self.master_db_path = master_db_path
+        self.migration_id = migration_id
+
         # --log-file: sobrescreve path do log (para execução paralela)
         if override_log_file:
-            self.config.setdefault('logging', {})['file'] = override_log_file
+            # Se for path relativo, coloca dentro do LOG_DIR
+            p = Path(override_log_file)
+            if not p.is_absolute():
+                p = LOG_DIR / p
+            self.config.setdefault('logging', {})['file'] = str(p)
 
         self.progress = MigrationProgress()
         self.columns: List[ColumnMeta] = []
@@ -451,8 +319,8 @@ class FirebirdToPgMigrator:
             root.removeHandler(h)
         root.setLevel(level)
 
-        fh = logging.FileHandler(cfg.get('file', str(LOG_DIR / 'migration.log')),
-                                 encoding='utf-8')
+        log_file = cfg.get('file') or str(LOG_DIR / 'migration.log')
+        fh = logging.FileHandler(log_file, encoding='utf-8')
         fh.setFormatter(fmt)
         root.addHandler(fh)
 
@@ -492,8 +360,8 @@ class FirebirdToPgMigrator:
 
         # Backward compat: formato antigo com source_table / dest_table
         return [{
-            'source':   cfg_m['source_table'],
-            'dest':     cfg_m['dest_table'],
+            'source':   cfg_m.get('source_table', 'UNKNOWN'),
+            'dest':     cfg_m.get('dest_table', 'unknown'),
             'state_db': cfg_m.get('state_db') or str(WORK_DIR / 'migration_state.db'),
         }]
 
@@ -512,7 +380,7 @@ class FirebirdToPgMigrator:
             charset=_fb_charset_for_connect(c.get('charset', 'WIN1252')))
 
     def _pg_conn(self):
-        c = self.config['postgresql']
+        c = self.config['postgres'] if 'postgres' in self.config else self.config['postgresql']
         conn = psycopg2.connect(
             host=c['host'], port=c.get('port', 5432),
             database=c['database'],
@@ -523,12 +391,12 @@ class FirebirdToPgMigrator:
 
     # ─── metadados ──────────────────────────────────────────
 
-    def _discover_columns(self) -> List[ColumnMeta]:
+    def _discover_columns(self, table_name: str) -> List[ColumnMeta]:
         """Mapeia colunas do Firebird para PostgreSQL."""
         conn = self._fb_conn()
         try:
             cur = conn.cursor()
-            tbl = self.config['migration']['source_table'].upper()
+            tbl = table_name.upper()
 
             cur.execute("""
                 SELECT rf.RDB$FIELD_NAME,
@@ -576,12 +444,12 @@ class FirebirdToPgMigrator:
             conn.close()
         return cols
 
-    def _discover_pk(self) -> List[str]:
+    def _discover_pk(self, table_name: str) -> List[str]:
         """Colunas da PK no Firebird."""
         conn = self._fb_conn()
         try:
             cur = conn.cursor()
-            tbl = self.config['migration']['source_table'].upper()
+            tbl = table_name.upper()
             cur.execute("""
                 SELECT sg.RDB$FIELD_NAME
                 FROM RDB$RELATION_CONSTRAINTS rc
@@ -596,13 +464,13 @@ class FirebirdToPgMigrator:
             conn.close()
         return pks
 
-    def _count_rows(self) -> int:
+    def _count_rows(self, table_name: str) -> int:
         """[BUG FIX] SELECT COUNT(*) com sintaxe corrigida."""
-        self.log.info('Contando linhas (pode demorar)...')
+        self.log.info(f'Contando linhas de {table_name} (pode demorar)...')
         conn = self._fb_conn()
         try:
             cur = conn.cursor()
-            tbl = self.config['migration']['source_table'].upper()
+            tbl = table_name.upper()
             cur.execute(f'SELECT COUNT(*) FROM "{tbl}"')
             total = cur.fetchone()[0]
         finally:
@@ -618,10 +486,10 @@ class FirebirdToPgMigrator:
 
     # ─── destino ────────────────────────────────────────────
 
-    def _check_dest_table(self):
-        cfg = self.config['postgresql']
+    def _check_dest_table(self, table_name: str):
+        cfg = self.config['postgresql'] if 'postgresql' in self.config else self.config['postgres']
         schema = cfg.get('schema', 'public')
-        table = self.config['migration']['dest_table']
+        table = table_name.lower()
         conn = self._pg_conn()
         cur = conn.cursor()
         cur.execute("""
@@ -639,21 +507,21 @@ class FirebirdToPgMigrator:
         conn.close()
         self.log.info(f'Destino "{schema}.{table}" OK.')
 
-    def _truncate_dest(self):
-        cfg = self.config['postgresql']
+    def _truncate_dest(self, table_name: str):
+        cfg = self.config['postgresql'] if 'postgresql' in self.config else self.config['postgres']
         schema = cfg.get('schema', 'public')
-        table = self.config['migration']['dest_table']
+        table = table_name.lower()
         conn = self._pg_conn()
         cur = conn.cursor()
         cur.execute(f'TRUNCATE TABLE "{schema}"."{table}" CASCADE')
         conn.commit()
         cur.close()
         conn.close()
-        self.log.info('Destino truncado.')
+        self.log.info(f'Destino {table} truncado.')
 
     # ─── otimização WAL ─────────────────────────────────────
 
-    def _optimize_pg(self, conn):
+    def _optimize_pg(self, conn, table_name: str):
         """
         [PERF] Otimizações PostgreSQL para carga em massa.
         Reduz WAL e melhora throughput.
@@ -669,8 +537,9 @@ class FirebirdToPgMigrator:
 
         # Se o usuário tiver permissão, tenta reduzir WAL
         try:
-            cur.execute(f"ALTER TABLE \"{self.config['postgresql'].get('schema','public')}\""
-                        f".\"{self.config['migration']['dest_table']}\" "
+            cfg_pg = self.config['postgresql'] if 'postgresql' in self.config else self.config['postgres']
+            cur.execute(f"ALTER TABLE \"{cfg_pg.get('schema','public')}\""
+                        f".\"{table_name.lower()}\" "
                         f"SET (autovacuum_enabled = false)")
             conn.commit()
             self.log.info('Autovacuum desabilitado na tabela destino.')
@@ -680,32 +549,33 @@ class FirebirdToPgMigrator:
 
         conn.commit()
 
-    def _restore_pg(self, conn):
+    def _restore_pg(self, conn, table_name: str):
         """Restaura configurações após carga."""
         cur = conn.cursor()
         cur.execute("SET synchronous_commit = on")
         cur.execute("SET jit = on")
         try:
-            cur.execute(f"ALTER TABLE \"{self.config['postgresql'].get('schema','public')}\""
-                        f".\"{self.config['migration']['dest_table']}\" "
+            cfg_pg = self.config['postgresql'] if 'postgresql' in self.config else self.config['postgres']
+            cur.execute(f"ALTER TABLE \"{cfg_pg.get('schema','public')}\""
+                        f".\"{table_name.lower()}\" "
                         f"SET (autovacuum_enabled = true)")
         except Exception as e:
             self.log.warning(f'Falha ao reabilitar autovacuum em '
-                             f'"{self.config["migration"]["dest_table"]}": {e}. '
+                             f'"{table_name.lower()}": {e}. '
                              f'Verificar manualmente.')
         conn.commit()
 
     # ─── inserção: COPY protocol ────────────────────────────
 
-    def _insert_copy(self, pg_conn, rows: list, batch_num: int):
+    def _insert_copy(self, pg_conn, rows: list, batch_num: int, table_name: str):
         """
         [PERF] Insere via COPY protocol — 3-5× mais rápido que INSERT.
         [BUG FIX] BLOBs convertidos antes de serializar.
         """
         cur = pg_conn.cursor()
-        cfg_pg = self.config['postgresql']
+        cfg_pg = self.config['postgresql'] if 'postgresql' in self.config else self.config['postgres']
         schema = cfg_pg.get('schema', 'public')
-        table = self.config['migration']['dest_table']
+        table = table_name.lower()
         col_names = ', '.join(f'"{c.name.lower()}"' for c in self.columns)
         copy_sql = f'COPY "{schema}"."{table}" ({col_names}) FROM STDIN'
 
@@ -735,11 +605,11 @@ class FirebirdToPgMigrator:
                     if mid > 0:
                         errors = []
                         try:
-                            self._insert_copy(pg_conn, rows[:mid], batch_num)
+                            self._insert_copy(pg_conn, rows[:mid], batch_num, table_name)
                         except Exception as e1:
                             errors.append(('first_half', len(rows[:mid]), e1))
                         try:
-                            self._insert_copy(pg_conn, rows[mid:], batch_num)
+                            self._insert_copy(pg_conn, rows[mid:], batch_num, table_name)
                         except Exception as e2:
                             errors.append(('second_half', len(rows[mid:]), e2))
                         if errors:
@@ -754,7 +624,7 @@ class FirebirdToPgMigrator:
                     self.progress.rows_failed += len(rows)
                     raise
 
-    def _insert_values(self, pg_conn, rows: list, batch_num: int):
+    def _insert_values(self, pg_conn, rows: list, batch_num: int, table_name: str):
         """
         Fallback: INSERT via execute_values.
         Mais lento mas compatível com mais versões.
@@ -762,9 +632,9 @@ class FirebirdToPgMigrator:
         from psycopg2.extras import execute_values
 
         cur = pg_conn.cursor()
-        cfg_pg = self.config['postgresql']
+        cfg_pg = self.config['postgresql'] if 'postgresql' in self.config else self.config['postgres']
         schema = cfg_pg.get('schema', 'public')
-        table = self.config['migration']['dest_table']
+        table = table_name.lower()
         col_names = ', '.join(f'"{c.name.lower()}"' for c in self.columns)
         template = f'INSERT INTO "{schema}"."{table}" ({col_names}) VALUES %s'
 
@@ -783,11 +653,11 @@ class FirebirdToPgMigrator:
                     if mid > 0:
                         errors = []
                         try:
-                            self._insert_values(pg_conn, rows[:mid], batch_num)
+                            self._insert_values(pg_conn, rows[:mid], batch_num, table_name)
                         except Exception as e1:
                             errors.append(('first_half', len(rows[:mid]), e1))
                         try:
-                            self._insert_values(pg_conn, rows[mid:], batch_num)
+                            self._insert_values(pg_conn, rows[mid:], batch_num, table_name)
                         except Exception as e2:
                             errors.append(('second_half', len(rows[mid:]), e2))
                         if errors:
@@ -800,12 +670,12 @@ class FirebirdToPgMigrator:
                     self.progress.rows_failed += len(rows)
                     raise
 
-    def _insert_batch(self, pg_conn, rows: list, batch_num: int):
+    def _insert_batch(self, pg_conn, rows: list, batch_num: int, table_name: str):
         """Despacha para COPY ou INSERT conforme configuração."""
         if self.use_insert:
-            self._insert_values(pg_conn, rows, batch_num)
+            self._insert_values(pg_conn, rows, batch_num, table_name)
         else:
-            self._insert_copy(pg_conn, rows, batch_num)
+            self._insert_copy(pg_conn, rows, batch_num, table_name)
 
     # ─── conversão de linha ─────────────────────────────────
 
@@ -830,21 +700,17 @@ class FirebirdToPgMigrator:
 
     # ─── query de leitura ───────────────────────────────────
 
-    def _build_select_query(self, saved: Optional[MigrationProgress] = None
+    def _build_select_query(self, table_name: str, saved: Optional[MigrationProgress] = None
                             ) -> Tuple[str, tuple]:
         """
         Monta SELECT com paginação para restart.
         [BUG FIX] RDB$DB_KEY para tabelas sem PK — reiniciável.
         """
-        tbl = self.config['migration']['source_table'].upper()
+        tbl = table_name.upper()
         pk_cols = self.progress.pk_columns
 
         if pk_cols and saved and saved.last_pk_value:
             # Restart com PK.
-            # Para PK simples: WHERE pk > ?
-            # Para PK composta: WHERE (a, b) > (?, ?) via OR-expansion explícita,
-            # pois Firebird não suporta comparação de tuplas.
-            # Ex: (a > ?) OR (a = ? AND b > ?)
             order = ', '.join(f'"{pk}"' for pk in pk_cols)
             params = saved.last_pk_value
             if not isinstance(params, (list, tuple)):
@@ -888,16 +754,7 @@ class FirebirdToPgMigrator:
 
     def run(self, dry_run=False, scripts_only=False):
         """
-        Orquestra a migração em 3 fases globais:
-          Fase 0 — Coleta DDLs do PG e desabilita constraints de TODAS as tabelas.
-          Fase 1 — Carrega dados de cada tabela (sequencialmente).
-          Fase 2 — Recria constraints de TODAS as tabelas ao final.
-
-        Arquivos gerados por tabela (safety net para reexecução manual):
-          disable_constraints_{dest}.sql
-          enable_constraints_{dest}.sql
-          constraint_state_{dest}.json
-          migration_state_{dest}.db
+        Orquestra a migração.
         """
         self.log.info('=' * 70)
         self.log.info('  MIGRAÇÃO FIREBIRD 3 → POSTGRESQL')
@@ -905,207 +762,88 @@ class FirebirdToPgMigrator:
 
         tables = self._resolve_tables()
         self.log.info(f'Tabelas configuradas: {len(tables)}')
-        for t in tables:
-            self.log.info(f'  {t["source"]} → {t["dest"]}')
-
-        cfg_pg = self.config['postgresql']
-        schema = cfg_pg.get('schema', 'public')
-        pg_params = {
-            'host':     cfg_pg['host'],
-            'port':     cfg_pg.get('port', 5432),
-            'database': cfg_pg['database'],
-            'user':     cfg_pg['user'],
-            'password': cfg_pg['password'],
-        }
-
-        # ══════════════════════════════════════════════════════
-        #  FASE 0 — Coletar DDLs e desabilitar constraints
-        # ══════════════════════════════════════════════════════
-        self.log.info('')
-        self.log.info('━' * 70)
-        self.log.info('  FASE 0 — Coleta de DDLs e desabilitação de constraints')
-        self.log.info('━' * 70)
-
-        prep = []   # lista de (tbl_cfg, cman, state_path)
+        
         for tbl_cfg in tables:
-            dest = tbl_cfg['dest']
-            self.log.info(f'  [{dest}] Coletando constraints do PostgreSQL...')
-
-            cman = ConstraintManager(pg_params, schema, dest)
-            n_obj = cman.collect_all()
-
-            state_path   = str(WORK_DIR / f'constraint_state_{dest}.json')
-            disable_path = str(WORK_DIR / f'disable_constraints_{dest}.sql')
-            enable_path  = str(WORK_DIR / f'enable_constraints_{dest}.sql')
-
-            cman.save_state(state_path)
-            with open(disable_path, 'w', encoding='utf-8') as f:
-                f.write(cman.generate_disable_script())
-            with open(enable_path, 'w', encoding='utf-8') as f:
-                f.write(cman.generate_enable_script())
-
-            self.log.info(f'  [{dest}] {n_obj} objetos — scripts salvos: '
-                          f'{disable_path}, {enable_path}')
-            prep.append((tbl_cfg, cman, state_path))
-
-        if scripts_only:
-            self.log.info('Modo --generate-scripts-only. Encerrando.')
-            return
-
-        if not dry_run:
-            self.log.info('')
-            self.log.info('Desabilitando constraints em todas as tabelas...')
-            for tbl_cfg, cman, state_path in prep:
-                dest = tbl_cfg['dest']
-                self.log.info(f'  [{dest}] Removendo constraints/índices...')
-                cman.load_state(state_path)
-                cman.disable_all()
-
-        # ══════════════════════════════════════════════════════
-        #  FASE 1 — Carga de dados (uma tabela por vez)
-        # ══════════════════════════════════════════════════════
-        self.log.info('')
-        self.log.info('━' * 70)
-        self.log.info('  FASE 1 — Carga de dados')
-        self.log.info('━' * 70)
-
-        for tbl_cfg, _cman, _state_path in prep:
             if self._shutdown:
                 break
             self._load_table(tbl_cfg, dry_run)
 
-        # ── Resumo final ─────────────────────────────────────
-        self.log.info('')
-        self.log.info('=' * 70)
-        if self._shutdown:
-            self.log.warning('⚠  Migração interrompida.')
-            self.log.warning('   Constraints ainda desabilitadas.')
-        elif not dry_run:
-            self.log.info('  CARGA CONCLUÍDA ✓')
-        self.log.info('  Scripts para recriar constraints manualmente:')
-        for tbl_cfg, _cman, _state_path in prep:
-            dest = tbl_cfg['dest']
-            self.log.info(f'    psql -f enable_constraints_{dest}.sql')
-        self.log.info('=' * 70)
-
     def _load_table(self, tbl_cfg: dict, dry_run: bool):
-        """
-        Fase 1 para uma tabela: checkpoint, truncate, carga de dados.
-        Assume que constraints já foram desabilitadas na Fase 0.
-        """
         source    = tbl_cfg['source']
         dest      = tbl_cfg['dest']
-        state_db  = tbl_cfg['state_db']
+        state_db  = self.master_db_path if self.master_db_path else tbl_cfg['state_db']
 
         cfg_m  = self.config['migration']
-        cfg_pg = self.config['postgresql']
-        schema     = cfg_pg.get('schema', 'public')
+        cfg_pg = self.config['postgresql'] if 'postgresql' in self.config else self.config['postgres']
         batch_size = cfg_m.get('batch_size', 5000)
 
-        # Ajusta config para métodos internos que lêem source/dest_table
-        cfg_m['source_table'] = source
-        cfg_m['dest_table']   = dest
-
-        self._state   = StateManager(state_db)
+        # Inicializa StateManager com suporte a Master DB
+        self._state = StateManager(state_db, migration_id=self.migration_id, table_name=source)
         self.progress = MigrationProgress()
 
         self.log.info('')
         self.log.info(f'  ── {source} → {dest} ──')
 
         # ── Metadados ────────────────────────────────────────
-        self.columns = self._discover_columns()
-        blob_cols = [c for c in self.columns if c.is_blob]
-        self.log.info(f'  Colunas: {len(self.columns)} '
-                      f'(BLOBs: {[c.name for c in blob_cols]})')
-
-        pk_cols    = self._discover_pk()
+        self.columns = self._discover_columns(source)
+        pk_cols    = self._discover_pk(source)
         use_db_key = not pk_cols
-        self.log.info(
-            f'  PK: {pk_cols if pk_cols else "(nenhuma — usando RDB$DB_KEY)"}')
 
-        self._check_dest_table()
+        self._check_dest_table(source)
 
         # ── Checkpoint ───────────────────────────────────────
         saved      = self._state.load_progress()
         is_restart = False
 
-        if (saved and saved.status in ('running', 'paused', 'error')
-                and saved.source_table == source and saved.rows_migrated > 0):
+        if (saved and saved.status in ('running', 'paused', 'failed')
+                and saved.rows_migrated > 0):
             is_restart = True
-            self.log.info('')
-            self.log.info('  ╔' + '═' * 56 + '╗')
-            self.log.info(f'  ║  RESTART — {saved.rows_migrated:>10,} linhas migradas'
-                          + ' ' * (19 - len(f'{saved.rows_migrated:,}')) + '║')
-            self.log.info(f'  ║  Batch: {saved.current_batch:>8,}  '
-                          f'Status: {saved.status:<12}    ║')
-            self.log.info('  ╚' + '═' * 56 + '╝')
-            self.log.info('')
-
-            self.log.info('  Retomando automaticamente do checkpoint.')
-
-        if not is_restart:
-            self._state.reset()
+            self.log.info(f'  RESTART — {saved.rows_migrated:,} linhas já migradas.')
 
         # ── Contagem ─────────────────────────────────────────
         if not is_restart or not saved.total_rows:
-            total_rows = self._count_rows()
+            total_rows = self._count_rows(source)
         else:
             total_rows = saved.total_rows
 
         total_batches = max(1, (total_rows + batch_size - 1) // batch_size)
 
         if dry_run:
-            self.log.info(f'  DRY-RUN: {total_rows:,} linhas, '
-                          f'{total_batches:,} batches × {batch_size:,}')
-            self.log.info(f'  Modo: {"COPY" if not self.use_insert else "INSERT"}')
+            self.log.info(f'  DRY-RUN: {total_rows:,} linhas.')
             return
 
-        # ── Truncar (somente em run fresh) ───────────────────
+        # ── Truncar ──────────────────────────────────────────
         if not is_restart:
-            self._truncate_dest()
+            self._truncate_dest(source)
 
         # ── Progresso inicial ─────────────────────────────────
         if is_restart:
             self.progress = saved
             self.progress.status = 'running'
-            self.progress.phase  = 'migrating'
         else:
             self.progress = MigrationProgress(
                 source_table=source, dest_table=dest,
                 total_rows=total_rows, batch_size=batch_size,
                 total_batches=total_batches, pk_columns=pk_cols,
                 use_db_key=use_db_key,
-                status='running', phase='migrating',
+                status='running',
                 started_at=datetime.now().isoformat(),
-                constraints_disabled=True)
+                category='big' if total_rows > 1000000 else 'small')
+        
         self._state.save_progress(self.progress)
 
         # ── Carga ────────────────────────────────────────────
-        self.log.info(f'  Modo: {"COPY" if not self.use_insert else "INSERT"} | '
-                      f'Batch: {batch_size:,} | Total: {total_batches:,}')
-        if is_restart:
-            self.log.info(f'  Retomando do batch {self.progress.current_batch + 1}')
-
         fb_conn = self._fb_conn()
         pg_conn = self._pg_conn()
 
         try:
-            self._optimize_pg(pg_conn)
+            self._optimize_pg(pg_conn, source)
 
             fb_cur = fb_conn.cursor()
             fb_cur.arraysize = cfg_m.get('fetch_array_size', 10000)
 
-            select_sql, select_params = self._build_select_query(
-                saved if is_restart else None)
-            self.log.info(f'  Query: {select_sql[:100]}...')
+            select_sql, select_params = self._build_select_query(source, saved if is_restart else None)
             fb_cur.execute(select_sql, select_params)
-
-            if is_restart and use_db_key and not saved.last_db_key:
-                skip = saved.rows_migrated
-                if skip > 0:
-                    self.log.warning(f'  Descartando {skip:,} linhas (sem PK)...')
-                    for _ in range(skip):
-                        fb_cur.fetchone()
 
             t0        = time.time()
             last_save = t0
@@ -1114,182 +852,93 @@ class FirebirdToPgMigrator:
 
             while not self._shutdown:
                 row = fb_cur.fetchone()
-
                 if row is None:
                     if batch_buf:
                         batch_num += 1
-                        self._insert_batch(pg_conn, batch_buf, batch_num)
+                        self._insert_batch(pg_conn, batch_buf, batch_num, source)
                         self._update_progress(batch_buf, batch_num, t0)
-                        batch_buf = []
                     break
 
                 batch_buf.append(row)
-
                 if len(batch_buf) >= batch_size:
                     batch_num += 1
-                    self._insert_batch(pg_conn, batch_buf, batch_num)
+                    self._insert_batch(pg_conn, batch_buf, batch_num, source)
                     self._update_progress(batch_buf, batch_num, t0)
                     batch_buf = []
-                    gc.collect()
-
                     if time.time() - last_save > 10:
                         self._state.save_progress(self.progress)
                         last_save = time.time()
 
-            # ── Finalização da carga ──────────────────────────
-            if self._shutdown:
-                self.progress.status = 'paused'
-                self.progress.phase  = 'paused'
-                self.progress.updated_at = datetime.now().isoformat()
-                self._state.save_progress(self.progress)
-                self.log.warning(f'  ⏸  [{source}] PAUSADO. '
-                                 'Execute novamente para continuar.')
-            else:
-                elapsed = time.time() - t0
-                # status 'loaded': dados ok, constraints ainda desabilitadas
-                # (serão recriadas na Fase 2)
-                self.progress.status       = 'loaded'
-                self.progress.phase        = 'loaded'
+            if not self._shutdown:
+                self.progress.status = 'completed'
                 self.progress.completed_at = datetime.now().isoformat()
-                self.progress.elapsed_seconds = elapsed
-                if elapsed > 0:
-                    self.progress.speed_rows_per_sec = (
-                        self.progress.rows_migrated / elapsed)
                 self._state.save_progress(self.progress)
-
-                self.log.info('')
-                self.log.info('  ╔' + '═' * 56 + '╗')
-                self.log.info(f'  ║  [{source}] CARGA CONCLUÍDA'
-                              + ' ' * 26 + '║')
-                self.log.info(f'  ║  Linhas: {self.progress.rows_migrated:>10,}  '
-                              f'Erros: {self.progress.rows_failed:>6,}'
-                              + ' ' * 8 + '║')
-                self.log.info(f'  ║  Tempo: {_fmt_dur(elapsed):<14}  '
-                              f'Vel: {self.progress.speed_rows_per_sec:>10,.0f} l/s  ║')
-                self.log.info('  ╚' + '═' * 56 + '╝')
+                self.log.info(f'  [{source}] Concluído.')
 
         finally:
             fb_conn.close()
-            self._restore_pg(pg_conn)
+            self._restore_pg(pg_conn, source)
             pg_conn.close()
 
     def _update_progress(self, batch_rows: list, batch_num: int, t0: float):
-        """Atualiza progresso, calcula ETA, faz log."""
         n = len(batch_rows)
         self.progress.rows_migrated += n
         self.progress.current_batch = batch_num
 
-        # Checkpoint PK
         if self.progress.pk_columns:
             last = batch_rows[-1]
             self.progress.last_pk_value = [
                 last[self._col_index(pk)] for pk in self.progress.pk_columns
             ]
         elif self.progress.use_db_key:
-            # Salvar último RDB$DB_KEY se disponível (última coluna do SELECT)
             last = batch_rows[-1]
             if len(last) > len(self.columns):
                 self.progress.last_db_key = last[-1]
 
         elapsed = time.time() - t0
-        migrated = self.progress.rows_migrated
-        total = self.progress.total_rows
-        speed = migrated / elapsed if elapsed > 0 else 0
-        remaining = total - migrated
-        eta = remaining / speed if speed > 0 else 0
-
+        speed = self.progress.rows_migrated / elapsed if elapsed > 0 else 0
         self.progress.speed_rows_per_sec = speed
-        self.progress.eta_seconds = eta
-        self.progress.elapsed_seconds = elapsed
+        self.progress.eta_seconds = (self.progress.total_rows - self.progress.rows_migrated) / speed if speed > 0 else 0
         self.progress.updated_at = datetime.now().isoformat()
-
-        pct = (migrated / total * 100) if total > 0 else 0
-        bar_len = 30
-        filled = int(bar_len * pct / 100)
-        bar = '█' * filled + '░' * (bar_len - filled)
-
-        self.log.info(
-            f'  [{bar}] {pct:5.1f}% | '
-            f'{migrated:>12,}/{total:>12,} | '
-            f'Lote {batch_num:>5,} | '
-            f'{speed:>10,.0f} lin/s | '
-            f'ETA {_fmt_dur(eta):>10} | '
-            f'{_fmt_dur(elapsed)}')
-
-        self._state.log_batch(batch_num, n, migrated, speed, eta)
-
-
-# ═══════════════════════════════════════════════════════════════
-#  CLI
-# ═══════════════════════════════════════════════════════════════
+        
+        self.log.info(f'  Migradas: {self.progress.rows_migrated:,}/{self.progress.total_rows:,} '
+                      f'({self.progress.rows_migrated/self.progress.total_rows*100:.1f}%) | '
+                      f'Vel: {speed:,.0f} l/s | ETA: {_fmt_dur(self.progress.eta_seconds)}')
 
 def main():
-    p = argparse.ArgumentParser(
-        description='Migra Firebird 3 -> PostgreSQL',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Exemplos:
-  # Migrar tabela especifica (recomendado para execucao paralela):
-  python migrator_v2.py --table CONTROLEVERSAO
-  python migrator_v2.py --table LOG_EVENTOS         # em outro terminal
-
-  # Apenas gerar scripts SQL (sem migrar):
-  python migrator_v2.py --table CONTROLEVERSAO --generate-scripts-only
-
-  # Dry-run (mostra contagens sem escrever):
-  python migrator_v2.py --table CONTROLEVERSAO --dry-run
-        """)
+    p = argparse.ArgumentParser(description='Migra Firebird 3 -> PostgreSQL')
     p.add_argument('-c', '--config', default='config.yaml')
-    p.add_argument('--table', type=str, default=None,
-                   metavar='NOME',
-                   help='Nome da tabela a migrar. '
-                        'Firebird usa MAIÚSCULAS, PostgreSQL usa minúsculas '
-                        '(conversão automática). Sobrescreve o config.yaml.')
-    p.add_argument('--log-file', type=str, default=None,
-                   metavar='ARQUIVO',
-                   help='Arquivo de log (padrão: migration_{tabela}.log quando '
-                        '--table é usado, ou o valor do config.yaml).')
-    p.add_argument('--reset', action='store_true',
-                   help='Descarta checkpoint e reinicia do zero.')
-    p.add_argument('--dry-run', action='store_true',
-                   help='Mostra estatísticas sem escrever dados.')
-    p.add_argument('--generate-scripts-only', action='store_true',
-                   help='Apenas gera os scripts SQL de constraints.')
-    p.add_argument('--batch-size', type=int, default=None,
-                   help='Linhas por batch (sobrescreve config.yaml).')
-    p.add_argument('--use-insert', action='store_true',
-                   help='Usa INSERT em vez de COPY (mais lento, mais compatível).')
+    p.add_argument('--table', type=str, default=None)
+    p.add_argument('--master-db', type=str, default=None)
+    p.add_argument('--migration-id', type=int, default=None)
+    p.add_argument('--work-dir', type=str, default=None)
+    p.add_argument('--reset', action='store_true')
+    p.add_argument('--dry-run', action='store_true')
+    p.add_argument('--use-insert', action='store_true')
     args = p.parse_args()
 
-    if not Path(args.config).exists():
-        print(f'ERRO: {args.config} não encontrado.')
-        sys.exit(1)
-
-    # Derivar log file automaticamente quando --table é usado
-    log_file = args.log_file
-    if log_file is None and args.table:
-        log_file = f'migration_{args.table.lower()}.log'
-
     m = FirebirdToPgMigrator(args.config,
-                              override_batch_size=args.batch_size,
                               use_insert=args.use_insert,
                               override_table=args.table,
-                              override_log_file=log_file)
+                              master_db_path=args.master_db,
+                              migration_id=args.migration_id,
+                              work_dir=args.work_dir)
 
     if args.reset:
         for tbl_cfg in m._resolve_tables():
-            StateManager(tbl_cfg['state_db']).reset()
-        if not (args.dry_run or args.generate_scripts_only):
-            print('Checkpoints resetados. Iniciando...')
+            state_db = args.master_db if args.master_db else tbl_cfg['state_db']
+            StateManager(state_db, migration_id=args.migration_id, table_name=tbl_cfg['source']).reset()
 
     try:
-        m.run(dry_run=args.dry_run, scripts_only=args.generate_scripts_only)
+        m.run(dry_run=args.dry_run)
     except KeyboardInterrupt:
-        print('\nInterrompido.')
         sys.exit(130)
     except Exception as e:
         logging.getLogger('migrator').error(f'Fatal: {e}', exc_info=True)
         sys.exit(1)
+
+if __name__ == '__main__':
+    main()
 
 
 if __name__ == '__main__':

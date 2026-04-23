@@ -17,7 +17,6 @@ fb/
 .env
 config*.yaml
 config_*.yaml
-*.md
 *.json
 *.DOCKER
 *.html

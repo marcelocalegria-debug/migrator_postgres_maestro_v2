@@ -821,6 +821,149 @@ def show_summary_all(console=None, only: set = None):
                   f'{pct:6.2f}%  {m:>10,}/{t:>10,}')
 
 
+# ─── monitoramento unificado (MigrationDB) ──────────────────────────────────
+
+def _read_migration_db(db_path: Path) -> dict:
+    """Lê o estado completo do MigrationDB centralizado."""
+    result = {
+        'meta': {},
+        'steps': [],
+        'tables': [],
+        'stats': {'total_rows': 0, 'rows_migrated': 0, 'speed': 0, 'eta': 0}
+    }
+    if not db_path.exists():
+        return result
+        
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        conn.row_factory = sqlite3.Row
+        conn.execute('PRAGMA journal_mode=WAL')
+        
+        # Meta
+        row = conn.execute("SELECT * FROM migration_meta ORDER BY id DESC LIMIT 1").fetchone()
+        if row: result['meta'] = dict(row)
+        
+        # Steps
+        rows = conn.execute("SELECT * FROM steps ORDER BY step_number").fetchall()
+        result['steps'] = [dict(r) for r in rows]
+        
+        # Tables (Big & Small)
+        rows = conn.execute("""
+            SELECT * FROM tables 
+            WHERE status != 'pending' OR category = 'big'
+            ORDER BY category DESC, source_table
+        """).fetchall()
+        result['tables'] = [dict(r) for r in rows]
+        
+        # Stats globais
+        stats = conn.execute("""
+            SELECT SUM(total_rows), SUM(rows_migrated), AVG(speed_rows_per_sec)
+            FROM tables WHERE status IN ('running', 'completed')
+        """).fetchone()
+        if stats:
+            result['stats']['total_rows'] = stats[0] or 0
+            result['stats']['rows_migrated'] = stats[1] or 0
+            result['stats']['speed'] = stats[2] or 0
+            if result['stats']['speed'] > 0:
+                result['stats']['eta'] = (result['stats']['total_rows'] - result['stats']['rows_migrated']) / result['stats']['speed']
+        
+        conn.close()
+    except Exception as e:
+        logger.error(f"Erro ao ler MigrationDB: {e}")
+    return result
+
+def _build_unified_panel(db_path: Path):
+    """Constrói o painel Rich unificado para o Maestro V2."""
+    data = _read_migration_db(db_path)
+    if not data['meta']:
+        return Panel("Aguardando inicialização do MigrationDB...", title="Maestro V2")
+        
+    # 1. Tabela de Steps
+    step_table = Table(box=box.SIMPLE, expand=True, title="[bold blue]Pipeline de Migração[/bold blue]")
+    step_table.add_column("Step", justify="right", style="dim")
+    step_table.add_column("Nome")
+    step_table.add_column("Status")
+    step_table.add_column("Duração", justify="right")
+    
+    for s in data['steps']:
+        status = s['status'].upper()
+        color = _status_color(s['status'])
+        
+        # Cálculo de duração simples
+        dur = "-"
+        if s['started_at'] and s['completed_at']:
+            try:
+                t1 = datetime.fromisoformat(s['started_at'])
+                t2 = datetime.fromisoformat(s['completed_at'])
+                dur = _fd((t2 - t1).total_seconds())
+            except: pass
+        elif s['started_at']:
+            dur = "Rodando..."
+            
+        step_table.add_row(
+            str(s['step_number']),
+            s['step_name'],
+            Text(status, style=f"bold {color}"),
+            dur
+        )
+
+    # 2. Tabela de Tabelas Ativas/Big
+    table_table = Table(box=box.SIMPLE, expand=True, title="[bold green]Progresso das Tabelas[/bold green]")
+    table_table.add_column("Tabela", style="bold")
+    table_table.add_column("Categoria", style="dim")
+    table_table.add_column("Progresso")
+    table_table.add_column("Status", justify="center")
+    table_table.add_column("Velocidade", justify="right")
+    
+    for t in data['tables']:
+        pct = _calc_pct(t)
+        status = t['status'].upper()
+        color = _status_color(t['status'])
+        
+        table_table.add_row(
+            f"{t['source_table']} -> {t['dest_table']}",
+            t['category'],
+            f"{_bar(pct, 15)} {pct:5.1f}%",
+            Text(status, style=f"bold {color}"),
+            f"{t['speed_rows_per_sec']:,.0f} l/s"
+        )
+
+    # 3. Rodapé com Stats Globais
+    s = data['stats']
+    pct_global = (s['rows_migrated'] / s['total_rows'] * 100) if s['total_rows'] > 0 else 0
+    footer = (
+        f"Progresso Global: [bold cyan]{pct_global:.2f}%[/bold cyan] | "
+        f"Migradas: [bold]{s['rows_migrated']:,}[/bold] / {s['total_rows']:,} | "
+        f"Velocidade: [bold green]{s['speed']:,.0f} l/s[/bold green] | "
+        f"ETA: [bold yellow]{_fd(s['eta'])}[/bold yellow]"
+    )
+
+    main_layout = Table.grid(expand=True)
+    main_layout.add_row(step_table)
+    main_layout.add_row(table_table)
+    main_layout.add_row(Panel(footer, border_style="dim"))
+    
+    return Panel(main_layout, title=f"Maestro V2 - Migração {data['meta']['seq']}", border_style="blue")
+
+def display_unified_live(db_path: Path, interval: float = 2.0):
+    """Inicia o display Rich Live para o monitoramento unificado."""
+    if not HAS_RICH:
+        print("Erro: Rich não está instalado. Não é possível usar o monitor unificado.")
+        return
+        
+    from rich.live import Live
+    from rich.console import Console as RConsole
+    console = RConsole()
+    
+    with Live(_build_unified_panel(db_path), console=console, refresh_per_second=1/interval) as live:
+        try:
+            while True:
+                time.sleep(interval)
+                live.update(_build_unified_panel(db_path))
+        except KeyboardInterrupt:
+            pass
+
+
 # ─── CLI ────────────────────────────────────────────────────────────────────
 
 def main():
@@ -830,18 +973,18 @@ def main():
         epilog="""
 Exemplos:
   python monitor.py                                  # painel de todas as migracoes
+  python monitor.py --db MIGRACAO_0001/migration.db  # monitor unificado Maestro V2
   python monitor.py --big-tables                     # painel só das 10 tabelas grandes
   python monitor.py --small-tables                   # painel das 901 tabelas pequenas
   python monitor.py --state-db migration_state_operacao_credito.db  # detalhe unico
   python monitor.py --summary                        # resumo de todas
-  python monitor.py --summary --big-tables           # resumo só das 10 grandes
   python monitor.py --history 50 --state-db X.db    # historico de batches
   python monitor.py --constraints                    # estado das constraints
   python monitor.py -i 5                             # refresh a cada 5s
         """)
     ap.add_argument('-s', '--state-db', default=None,
                     help='Banco de estado especifico (se omitido, detecta todos automaticamente)')
-    ap.add_argument('--summary',    action='store_true',
+    ap.add_argument('--summary', action='store_true',
                     help='Exibe resumo tabular (todas as tabelas ou a especificada por --state-db)')
     ap.add_argument('--json',       dest='json_out', action='store_true',
                     help='Saida JSON (requer --state-db)')
@@ -861,12 +1004,20 @@ Exemplos:
     ap.add_argument('--master-db', type=str, default=None,
                     help='Caminho do master state DB para --small-tables '
                          '(padrão: migration_state_smalltables_master.db)')
+    ap.add_argument('--migration-db', '--db', type=str, default=None,
+                    help='Caminho do banco centralizador MigrationDB (Maestro V2). '
+                         'Ativa o monitoramento unificado.')
     ap.add_argument('-i', '--interval', type=float, default=2.0,
                     help='Intervalo de refresh em segundos (padrao: 2)')
     args = ap.parse_args()
 
     console = Console() if HAS_RICH else None
     only_big = BIG_TABLES if args.big_tables else None
+
+    # ── Modo MigrationDB (Maestro V2) ────────────────────────
+    if args.migration_db:
+        display_unified_live(Path(args.migration_db), args.interval)
+        return
 
     # ── Modo tabelas pequenas ────────────────────────────────
     if args.small_tables:
