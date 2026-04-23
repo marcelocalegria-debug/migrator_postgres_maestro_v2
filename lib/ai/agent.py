@@ -125,7 +125,8 @@ class MigrationAIAgent:
                         "PYTHONPATH": str(self.root_dir.absolute()),
                         "MIGRATION_CONFIG_PATH": str(self.project_path / "config.yaml")
                     }
-                )
+                ),
+                timeout=60 # Aumentado de 5s (padrão) para 60s
             )
         )
         tools.append(firebird_postgres_mcp)

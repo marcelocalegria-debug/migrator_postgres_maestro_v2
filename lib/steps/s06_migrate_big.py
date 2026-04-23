@@ -1,5 +1,6 @@
 import subprocess
 import os
+import sys
 import time
 from pathlib import Path
 from .base import StepBase
@@ -39,7 +40,7 @@ class MigrateBigStep(StepBase):
         for table, script in specialized:
             print(f"Iniciando especializado: {table}...")
             cmd = [
-                'python', script,
+                sys.executable, script,
                 '--config', str(config_path.absolute()),
                 '--master-db', str(master_db.absolute()),
                 '--migration-id', str(self.migration_id),
@@ -53,7 +54,7 @@ class MigrateBigStep(StepBase):
         for table in universal_v2:
             print(f"Iniciando V2: {table}...")
             cmd = [
-                'python', 'migrator_v2.py',
+                sys.executable, 'migrator_v2.py',
                 '--table', table,
                 '--config', str(config_path.absolute()),
                 '--master-db', str(master_db.absolute()),

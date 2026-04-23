@@ -1,4 +1,5 @@
 import subprocess
+import sys
 from pathlib import Path
 from .base import StepBase
 
@@ -14,7 +15,7 @@ class MigrateSmallStep(StepBase):
         
         # Executa migrator_smalltables_v2.py
         cmd = [
-            'python', 'migrator_smalltables_v2.py',
+            sys.executable, 'migrator_smalltables_v2.py',
             '--config', str(config_path.absolute()),
             '--small-tables',
             '--master-db', str(master_db.absolute()),

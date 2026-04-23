@@ -1,4 +1,5 @@
 import subprocess
+import sys
 from pathlib import Path
 from .base import StepBase
 
@@ -15,7 +16,7 @@ class ReportStep(StepBase):
         # O script original gera um relatório de estrutura
         # Vamos adaptá-lo ou usá-lo como base
         cmd = [
-            'python', 'gera_relatorio_compara_estrutura_fb2pg_html.py',
+            sys.executable, 'gera_relatorio_compara_estrutura_fb2pg_html.py',
             '--config', str(config_path.absolute()),
             '--output', str(output_html.absolute())
         ]

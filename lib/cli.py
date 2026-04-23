@@ -1,4 +1,5 @@
 import os
+import sys
 import asyncio
 import psycopg2
 from pathlib import Path
@@ -392,6 +393,6 @@ class MaestroCLI:
         import subprocess
         try:
             # Abre o monitor em um novo processo que assume o terminal
-            subprocess.run(['python', 'monitor.py', '--db', str(master_db.absolute())])
+            subprocess.run([sys.executable, 'monitor.py', '--db', str(master_db.absolute())])
         except KeyboardInterrupt:
             pass

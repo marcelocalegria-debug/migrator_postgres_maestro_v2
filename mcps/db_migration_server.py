@@ -167,6 +167,53 @@ def count_firebird_tables() -> str:
         return f"Erro ao contar tabelas no Firebird: {str(e)}"
 
 @mcp.tool()
+def get_firebird_table_count(table_name: str) -> str:
+    """Retorna o número de registros (count) de uma tabela no Firebird."""
+    query = f"SELECT count(*) FROM {table_name.upper()}"
+    try:
+        conn = get_firebird_connection()
+        cur = conn.cursor()
+        cur.execute(query)
+        count = cur.fetchone()[0]
+        conn.close()
+        return f"Tabela {table_name.upper()} no Firebird possui {count:,} registros."
+    except Exception as e:
+        return f"Erro ao contar registros na tabela {table_name} do Firebird: {str(e)}"
+
+@mcp.tool()
+def execute_firebird_sql(sql: str) -> str:
+    """
+    Executa um comando SQL (apenas DDL ou SELECT) no Firebird.
+    Use para investigar dados ou metadados na origem.
+    """
+    sql_upper = sql.upper().strip()
+    # Guardrail básico de segurança
+    forbidden = ["DROP DATABASE", "DELETE FROM", "TRUNCATE", "UPDATE ", "DROP TABLE"]
+    for word in forbidden:
+        if word in sql_upper:
+            return f"ERRO DE SEGURANÇA: O comando '{word}' não é permitido via MCP no Firebird."
+            
+    try:
+        conn = get_firebird_connection()
+        cur = conn.cursor()
+        cur.execute(sql)
+        
+        if sql_upper.startswith("SELECT"):
+            # Limita a 50 linhas para não explodir o contexto
+            rows = cur.fetchmany(50)
+            desc = [d[0] for d in cur.description]
+            cur.close()
+            conn.close()
+            return f"Resultado (limitado a 50 linhas):\nColunas: {desc}\nDados: {str(rows)}"
+            
+        conn.commit()
+        cur.close()
+        conn.close()
+        return "Comando SQL executado com sucesso no Firebird."
+    except Exception as e:
+        return f"Erro ao executar SQL no Firebird: {str(e)}"
+
+@mcp.tool()
 def get_postgres_table_schema(table_name: str) -> str:
     """
     Busca os metadados (colunas e tipos) de uma tabela no PostgreSQL.

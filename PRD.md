@@ -65,8 +65,6 @@ CREATE DATABASE c6_producao
 
 ALTER DATABASE c6_producao SET default_tablespace TO 'tbs_c6_producao';
 
-
-
 COMMENT ON DATABASE c6_producao IS 'Banco c6 para sistema Prognum  ';
 
 GRANT ALL PRIVILEGES ON DATABASE c6_producao TO "c6_producao_user";
