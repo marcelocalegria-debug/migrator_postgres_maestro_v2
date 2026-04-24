@@ -24,6 +24,11 @@ from typing import Dict, List, Set, Tuple, Optional
 
 import yaml
 
+# Forçar encoding UTF-8 no stdout para Windows não bagunçar acentos
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 # ─── Firebird DLL auto-discovery (Windows) ────────────────────────────────────
 import fdb
 
@@ -96,14 +101,20 @@ def _fb_connect(cfg: dict):
 
 def _pg_connect(cfg: dict):
     c = cfg['postgresql']
-    conn = psycopg2.connect(
-        host=c['host'], port=c.get('port', 5432),
-        database=c['database'],
-        user=c['user'], password=c['password'],
-    )
-    conn.set_client_encoding('UTF8')
-    conn.autocommit = True
-    return conn
+    try:
+        conn = psycopg2.connect(
+            host=c['host'], port=c.get('port', 5432),
+            database=c['database'],
+            user=c['user'], password=c['password'],
+        )
+        conn.set_client_encoding('UTF8')
+        conn.autocommit = True
+        return conn
+    except psycopg2.OperationalError as e:
+        if "does not exist" in str(e):
+            print(f"\n[WARNING] Banco de dados '{c['database']}' nao existe no PostgreSQL.")
+            return None
+        raise
 
 
 # ─── Listagem de tabelas ───────────────────────────────────────────────────────
@@ -123,6 +134,8 @@ def _fb_tables(conn) -> list[str]:
 
 def _pg_tables(conn, schema: str) -> list[str]:
     """Retorna tabelas do schema PostgreSQL."""
+    if conn is None:
+        return []
     cur = conn.cursor()
     cur.execute("""
         SELECT table_name
@@ -708,8 +721,10 @@ def main():
         result = _compare_structure(fb_conn, pg_conn, schema, key, fb_name, pg_name, skip_count=args.skip_count)
         results.append(result)
 
-    fb_conn.close()
-    pg_conn.close()
+    if fb_conn:
+        fb_conn.close()
+    if pg_conn:
+        pg_conn.close()
 
     print('\nGerando relatório...')
     

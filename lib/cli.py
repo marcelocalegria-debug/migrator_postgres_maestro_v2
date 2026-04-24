@@ -213,7 +213,7 @@ class MaestroCLI:
         from .ai.agent import MigrationAIAgent
         
         async def run_chat():
-            agent = MigrationAIAgent(db_audit_path=f"sqlite+aiosqlite:///{audit_db.absolute().as_posix()}")
+            agent = MigrationAIAgent(project_path=str(mig_dir.absolute()))
             session_id = f"cli_{self.current_seq}"
             
             while True:

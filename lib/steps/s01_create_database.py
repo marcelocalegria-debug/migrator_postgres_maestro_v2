@@ -39,8 +39,8 @@ class CreateDatabaseStep(StepBase):
                 return False
 
             # 2. Validação de Tablespace
-            if target_ts in ('pg_default', 'pg_global', 'DEFAULT'):
-                print(f"[ERROR] Tablespace '{target_ts}' não é permitida. Use uma tablespace dedicada.")
+            if target_ts.lower() in ('pg_default', 'pg_global', 'default'):
+                print(f"[ERROR] Tablespace '{target_ts}' (padrão do sistema) não é permitida para o banco de dados da aplicação. Use uma tablespace dedicada (ex: tbs_{target_db}).")
                 self._print_manual_sql(target_db, target_user, target_ts)
                 return False
 

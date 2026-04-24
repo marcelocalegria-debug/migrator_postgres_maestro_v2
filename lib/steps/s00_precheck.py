@@ -95,7 +95,8 @@ class PrecheckStep(StepBase):
                 conn.commit()
                 print(f"[OK] Usuário {user} criado no Firebird.")
             except Exception as e:
-                if "already exists" in str(e).lower():
+                err_msg = str(e).lower()
+                if "already exists" in err_msg or "violation of primary or unique key constraint" in err_msg:
                     print(f"[INFO] Usuário {user} já existe no Firebird.")
                 else:
                     print(f"[WARNING] Não foi possível criar usuário FB: {e}")

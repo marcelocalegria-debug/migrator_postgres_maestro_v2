@@ -81,6 +81,16 @@ class ComparePreStep(StepBase):
                 f.write(output)
 
             if process.returncode != 0:
+                # Se o banco não existe, não faz sentido chamar a IA para analisar diferenças
+                if "nao existe no PostgreSQL" in output:
+                    print("[INFO] Ignorando análise da IA pois o banco de destino ainda não foi criado.")
+                    return True
+
+                # Se o banco existe mas está vazio (zero tabelas em comum), também pula a análise de diferenças de esquema
+                if "Total de tabelas       ║        0" in output or "Total de tabelas comparadas: 0" in output:
+                    print("[INFO] O banco de destino está vazio. Pule este passo ou rode o Step 2 (IMPORT_SCHEMA) para criar as tabelas.")
+                    return True
+
                 print("[WARNING] Diferenças encontradas na estrutura.")
                 
                 # Integração com o Agente ADK
@@ -102,8 +112,7 @@ DIFERENÇAS:
                     
                     # Executa de forma assíncrona usando asyncio.run
                     async def chat_with_agent():
-                        audit_db = f"sqlite+aiosqlite:///{mig_dir.absolute().as_posix()}/migration_audit.db"
-                        agent = MigrationAIAgent(db_audit_path=audit_db)
+                        agent = MigrationAIAgent(project_path=str(mig_dir.absolute()))
                         session_id = f"migracao_{self.migration_id}_{self.step_number}"
                         
                         # Primeira interação

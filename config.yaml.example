@@ -13,10 +13,11 @@ firebird:
 postgres:
   host: "localhost"
   port: 5432
-  database: "postgres"
+  database: "NOME_DO_BANCO_DESTINO"
   schema: "public"
-  user: "postgres"
-  password: "password"
+  user: "usuario_migracao"
+  password: "senha_do_usuario"
+  tablespace: "tbs_NOME_DO_BANCO" # Obrigatório usar tablespace dedicada
 
 # Configurações de performance do PostgreSQL para a sessão de carga
 performance:
