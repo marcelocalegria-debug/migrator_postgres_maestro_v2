@@ -6,6 +6,7 @@ dist/
 wheels/
 *.egg-info
 *.log
+*.db
 testes/
 MIGRACAO_*/
 Reports/
