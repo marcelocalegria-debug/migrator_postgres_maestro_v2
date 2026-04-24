@@ -639,6 +639,9 @@ class FirebirdToPgMigrator:
                             self.log.error(
                                 f'Batch {batch_num}: {len(errors)} sub-batch(es) falharam, '
                                 f'{total_lost} linhas afetadas: {errors}')
+                            raise RuntimeError(
+                                f'Batch {batch_num}: {total_lost} linhas não inseridas — '
+                                f'checkpoint NÃO avançado')
                         return
                 else:
                     self.log.error(
@@ -687,6 +690,9 @@ class FirebirdToPgMigrator:
                             self.log.error(
                                 f'Batch {batch_num}: {len(errors)} sub-batch(es) falharam, '
                                 f'{total_lost} linhas afetadas: {errors}')
+                            raise RuntimeError(
+                                f'Batch {batch_num}: {total_lost} linhas não inseridas — '
+                                f'checkpoint NÃO avançado')
                         return
                 else:
                     self.progress.rows_failed += len(rows)

@@ -71,8 +71,8 @@ from rich.text import Text
 from rich.rule import Rule
 from rich.align import Align
 
-# ─── Tabelas a verificar (Firebird MAIÚSCULAS → PostgreSQL minúsculas) ──────────
-TABELAS = [
+# ─── Lista fixa como fallback (usada só se a descoberta dinâmica falhar) ─────────
+_TABELAS_FIXAS = [
     ("CONTROLEVERSAO",     "controleversao"),
     ("LOG_EVENTOS",        "log_eventos"),
     ("HISTORICO_OPERACAO", "historico_operacao"),
@@ -84,6 +84,50 @@ TABELAS = [
     ("OCORRENCIA_SISAT",   "ocorrencia_sisat"),
     ("DOCUMENTO_OPERACAO", "documento_operacao"),
 ]
+
+
+def _descobrir_tabelas_com_bytea(cfg: dict, schema: str = "public") -> list:
+    """Descobre dinamicamente tabelas que têm BYTEA no PG e BLOB binário no FB.
+
+    Consulta information_schema.columns no PG para data_type='bytea', depois
+    verifica quais têm colunas BLOB SUB_TYPE 0 correspondentes no Firebird.
+    Retorna lista de tuplas (FB_NAME_MAIUSCULA, pg_name_minuscula).
+    Usa _TABELAS_FIXAS como fallback se a descoberta falhar.
+    """
+    try:
+        conn_pg = connect_pg(cfg)
+        conn_fb = connect_fb(cfg)
+        try:
+            cur = conn_pg.cursor()
+            cur.execute(
+                """
+                SELECT DISTINCT table_name
+                FROM information_schema.columns
+                WHERE table_schema = %s
+                  AND data_type = 'bytea'
+                ORDER BY table_name
+                """,
+                (schema,),
+            )
+            pg_tables = [row[0] for row in cur.fetchall()]
+
+            tabelas = []
+            for pg_name in pg_tables:
+                fb_name = pg_name.upper()
+                blob_cols = get_blob_binary_columns_fb(conn_fb, fb_name)
+                if blob_cols:
+                    tabelas.append((fb_name, pg_name))
+
+            return tabelas if tabelas else _TABELAS_FIXAS
+        finally:
+            conn_pg.close()
+            conn_fb.close()
+    except Exception as e:
+        console.print(
+            f"[yellow]Aviso: descoberta dinâmica falhou ({e}). "
+            f"Usando lista fixa ({len(_TABELAS_FIXAS)} tabelas).[/yellow]"
+        )
+        return _TABELAS_FIXAS
 
 console = Console()
 
@@ -568,18 +612,21 @@ def main():
 
     t_inicio = datetime.now()
 
+    # Descobre dinamicamente tabelas com BYTEA (fallback para lista fixa)
+    tabelas = _descobrir_tabelas_com_bytea(cfg, schema)
+    console.print(
+        f"[dim]Tabelas com BYTEA descobertas: {len(tabelas)}[/dim]\n"
+    )
+
     # Filtra tabelas se --table especificado
-    tabelas = TABELAS
     if args.table:
         needle = args.table.strip()
         tabelas = [
-            (fb, pg) for fb, pg in TABELAS
+            (fb, pg) for fb, pg in tabelas
             if pg.lower() == needle.lower() or fb.upper() == needle.upper()
         ]
         if not tabelas:
-            nomes = ", ".join(f"{fb}/{pg}" for fb, pg in TABELAS)
-            console.print(f"[red]Tabela não encontrada na lista: {needle}[/red]")
-            console.print(f"[dim]Tabelas disponíveis (Firebird/PostgreSQL): {nomes}[/dim]")
+            console.print(f"[red]Tabela não encontrada entre as tabelas com BYTEA: {needle}[/red]")
             sys.exit(1)
 
     n_workers = min(args.workers, len(tabelas))

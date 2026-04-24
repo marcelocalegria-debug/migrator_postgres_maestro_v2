@@ -263,6 +263,78 @@ def _pg_get_fks(conn, schema: str, table: str) -> Set[Tuple[str, str, str]]:
     return fks
 
 
+# ─── FK RULES (ON DELETE / ON UPDATE) ────────────────────────────────────────
+
+def _fb_get_fk_rules(conn, table: str) -> Dict[Tuple, Tuple[str, str]]:
+    """Retorna {(col_origem, tab_destino, col_destino): (del_rule, upd_rule)} para o Firebird."""
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+            TRIM(sg.RDB$FIELD_NAME),
+            TRIM(rc2.RDB$RELATION_NAME),
+            TRIM(sg2.RDB$FIELD_NAME),
+            TRIM(ref.RDB$DELETE_RULE),
+            TRIM(ref.RDB$UPDATE_RULE)
+        FROM RDB$RELATION_CONSTRAINTS rc
+        JOIN RDB$REF_CONSTRAINTS ref ON rc.RDB$CONSTRAINT_NAME = ref.RDB$CONSTRAINT_NAME
+        JOIN RDB$RELATION_CONSTRAINTS rc2 ON ref.RDB$CONST_NAME_UQ = rc2.RDB$CONSTRAINT_NAME
+        JOIN RDB$INDEX_SEGMENTS sg ON rc.RDB$INDEX_NAME = sg.RDB$INDEX_NAME
+        JOIN RDB$INDEX_SEGMENTS sg2 ON rc2.RDB$INDEX_NAME = sg2.RDB$INDEX_NAME
+        WHERE TRIM(rc.RDB$RELATION_NAME) = ?
+          AND rc.RDB$CONSTRAINT_TYPE = 'FOREIGN KEY'
+          AND sg.RDB$FIELD_POSITION = sg2.RDB$FIELD_POSITION
+        ORDER BY rc.RDB$CONSTRAINT_NAME, sg.RDB$FIELD_POSITION
+    """, (table,))
+    rules: Dict[Tuple, Tuple[str, str]] = {}
+    for row in cur.fetchall():
+        col_orig, tab_dest, col_dest, del_rule, upd_rule = row
+        key = (col_orig.lower(), tab_dest.lower(), col_dest.lower())
+        rules[key] = (
+            (del_rule or 'NO ACTION').upper().strip(),
+            (upd_rule or 'NO ACTION').upper().strip(),
+        )
+    return rules
+
+
+_PG_CONFTYPE: Dict[str, str] = {
+    'a': 'NO ACTION', 'r': 'RESTRICT', 'c': 'CASCADE',
+    'n': 'SET NULL', 'd': 'SET DEFAULT',
+}
+
+
+def _pg_get_fk_rules(conn, schema: str, table: str) -> Dict[Tuple, Tuple[str, str]]:
+    """Retorna {(col_origem, tab_destino, col_destino): (del_rule, upd_rule)} para o PostgreSQL."""
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+            att1.attname,
+            cls2.relname,
+            att2.attname,
+            con.confdeltype,
+            con.confupdtype
+        FROM pg_constraint con
+        JOIN pg_class cls1 ON con.conrelid = cls1.oid
+        JOIN pg_namespace nsp ON cls1.relnamespace = nsp.oid
+        JOIN pg_class cls2 ON con.confrelid = cls2.oid
+        CROSS JOIN LATERAL unnest(con.conkey, con.confkey) AS u(local_att, ref_att)
+        JOIN pg_attribute att1 ON att1.attrelid = con.conrelid AND att1.attnum = u.local_att
+        JOIN pg_attribute att2 ON att2.attrelid = con.confrelid AND att2.attnum = u.ref_att
+        WHERE nsp.nspname = %s
+          AND cls1.relname = %s
+          AND con.contype = 'f'
+        ORDER BY con.conname, u.local_att
+    """, (schema, table))
+    rules: Dict[Tuple, Tuple[str, str]] = {}
+    for row in cur.fetchall():
+        col_orig, tab_dest, col_dest, confdeltype, confupdtype = row
+        key = (col_orig.lower(), tab_dest.lower(), col_dest.lower())
+        rules[key] = (
+            _PG_CONFTYPE.get(confdeltype, 'NO ACTION'),
+            _PG_CONFTYPE.get(confupdtype, 'NO ACTION'),
+        )
+    return rules
+
+
 # ─── ÍNDICES ──────────────────────────────────────────────────────────────────
 
 def _fb_get_indexes(conn, table: str) -> Set[Tuple[str, bool]]:
@@ -403,10 +475,8 @@ def _pg_get_uniques(conn, schema: str, table: str) -> Set[str]:
 # ─── CHECK CONSTRAINTS ────────────────────────────────────────────────────────
 
 def _fb_get_checks(conn, table: str) -> Set[str]:
-    """Retorna conjunto de CHECK constraints via catálogo de constraints."""
+    """Retorna conjunto de nomes de CHECK constraints no Firebird."""
     cur = conn.cursor()
-    # Usa RDB$RELATION_CONSTRAINTS em vez de RDB$TRIGGERS para evitar confundir
-    # triggers de usuário com triggers gerados por CHECK constraints.
     cur.execute("""
         SELECT TRIM(rc.RDB$CONSTRAINT_NAME)
         FROM RDB$RELATION_CONSTRAINTS rc
@@ -418,7 +488,7 @@ def _fb_get_checks(conn, table: str) -> Set[str]:
 
 
 def _pg_get_checks(conn, schema: str, table: str) -> Set[str]:
-    """Retorna conjunto de CHECK constraints."""
+    """Retorna conjunto de nomes de CHECK constraints no PostgreSQL."""
     cur = conn.cursor()
     cur.execute("""
         SELECT constraint_name
@@ -432,6 +502,61 @@ def _pg_get_checks(conn, schema: str, table: str) -> Set[str]:
     # CHECK pelo migrador — no Firebird NOT NULL é atributo de coluna, não constraint.
     return {row[0].lower() for row in cur.fetchall()
             if not row[0].lower().endswith('_not_null')}
+
+
+def _normalize_check_expr(expr: str) -> str:
+    """Normaliza expressão CHECK: lowercase, sem espaços extras, remove wrapper CHECK(...)."""
+    import re
+    e = (expr or '').lower()
+    e = re.sub(r'\s+', ' ', e).strip()
+    # Remove wrapper 'check (...)' gerado pelo pg_get_constraintdef
+    m = re.match(r'^check\s*\((.+)\)$', e, re.DOTALL)
+    if m:
+        e = m.group(1).strip()
+    # Remove wrapper 'if (not (...)) then exception ...' do trigger Firebird
+    m2 = re.match(r'^if\s*\(not\s*\((.+)\)\)', e, re.DOTALL)
+    if m2:
+        e = m2.group(1).strip()
+    return e
+
+
+def _fb_get_check_exprs(conn, table: str) -> Dict[str, str]:
+    """Retorna {constraint_name: expressão_check} extraída do trigger source do Firebird."""
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT TRIM(rc.RDB$CONSTRAINT_NAME), t.RDB$TRIGGER_SOURCE
+        FROM RDB$RELATION_CONSTRAINTS rc
+        JOIN RDB$CHECK_CONSTRAINTS cc ON rc.RDB$CONSTRAINT_NAME = cc.RDB$CONSTRAINT_NAME
+        JOIN RDB$TRIGGERS t ON cc.RDB$TRIGGER_NAME = t.RDB$TRIGGER_NAME
+        WHERE TRIM(rc.RDB$RELATION_NAME) = ?
+          AND rc.RDB$CONSTRAINT_TYPE = 'CHECK'
+        ORDER BY rc.RDB$CONSTRAINT_NAME
+    """, (table,))
+    result = {}
+    for row in cur.fetchall():
+        name, src = row
+        result[name.strip().lower()] = (src or '').strip()
+    return result
+
+
+def _pg_get_check_exprs(conn, schema: str, table: str) -> Dict[str, str]:
+    """Retorna {constraint_name: pg_get_constraintdef()} para CHECK constraints no PostgreSQL."""
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT con.conname, pg_get_constraintdef(con.oid)
+        FROM pg_constraint con
+        JOIN pg_class cls ON con.conrelid = cls.oid
+        JOIN pg_namespace nsp ON cls.relnamespace = nsp.oid
+        WHERE nsp.nspname = %s
+          AND cls.relname = %s
+          AND con.contype = 'c'
+        ORDER BY con.conname
+    """, (schema, table))
+    return {
+        row[0].lower(): (row[1] or '')
+        for row in cur.fetchall()
+        if not row[0].lower().endswith('_not_null')
+    }
 
 
 # ─── Comparação de Estruturas ─────────────────────────────────────────────────
@@ -483,12 +608,12 @@ def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str,
     try:
         fb_fks = _fb_get_fks(fb_conn, fb_name.upper())
         pg_fks = _pg_get_fks(pg_conn, schema, pg_name)
-        
+
         if fb_fks != pg_fks:
             result['fk_ok'] = False
             only_fb = fb_fks - pg_fks
             only_pg = pg_fks - fb_fks
-            
+
             if only_fb:
                 result['issues'].append(f"FK só no FB: {only_fb}")
             if only_pg:
@@ -496,6 +621,23 @@ def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str,
     except Exception as e:
         result['fk_ok'] = False
         result['issues'].append(f"FK: ERRO - {e}")
+
+    # ─── FK Rules (ON DELETE / ON UPDATE) ─────────────────────────────
+    try:
+        fb_fk_rules = _fb_get_fk_rules(fb_conn, fb_name.upper())
+        pg_fk_rules = _pg_get_fk_rules(pg_conn, schema, pg_name)
+        for key in fb_fk_rules:
+            if key in pg_fk_rules:
+                fb_del, fb_upd = fb_fk_rules[key]
+                pg_del, pg_upd = pg_fk_rules[key]
+                if fb_del != pg_del or fb_upd != pg_upd:
+                    result['fk_ok'] = False
+                    result['issues'].append(
+                        f"FK-RULES {key}: "
+                        f"ON DELETE FB={fb_del} vs PG={pg_del}, "
+                        f"ON UPDATE FB={fb_upd} vs PG={pg_upd}")
+    except Exception as e:
+        result['issues'].append(f"FK-RULES: ERRO - {e}")
     
     # ─── Índices ──────────────────────────────────────────────────────
     try:
@@ -546,6 +688,24 @@ def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str,
                 result['issues'].append(f"CHECK só no FB: {only_fb_chk}")
             if only_pg_chk:
                 result['issues'].append(f"CHECK só no PG: {only_pg_chk}")
+
+        # Verifica divergência de expressão nas CHECKs presentes nos dois lados
+        try:
+            common_chk = fb_chk & pg_chk
+            if common_chk:
+                fb_exprs = _fb_get_check_exprs(fb_conn, fb_name.upper())
+                pg_exprs = _pg_get_check_exprs(pg_conn, schema, pg_name)
+                for name in common_chk:
+                    fb_norm = _normalize_check_expr(fb_exprs.get(name, ''))
+                    pg_norm = _normalize_check_expr(pg_exprs.get(name, ''))
+                    if fb_norm and pg_norm and fb_norm != pg_norm:
+                        result['check_ok'] = False
+                        result['issues'].append(
+                            f"CHECK {name}: expressão diverge — "
+                            f"FB='{fb_exprs.get(name, '')}' "
+                            f"vs PG='{pg_exprs.get(name, '')}'")
+        except Exception as e_expr:
+            result['issues'].append(f"CHECK-EXPR: ERRO ao comparar expressões - {e_expr}")
     except Exception as e:
         result['check_ok'] = False
         result['issues'].append(f"CHECK: ERRO - {e}")
