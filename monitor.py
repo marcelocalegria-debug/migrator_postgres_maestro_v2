@@ -20,8 +20,13 @@ import json
 import time
 import argparse
 import sqlite3
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Configuração básica de logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 try:
     from rich.console import Console

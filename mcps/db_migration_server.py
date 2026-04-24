@@ -83,29 +83,78 @@ def get_safe_pg_connection():
     )
 
 @mcp.tool()
-def check_migration_logs(lines: int = 50) -> str:
-    """Verifica os últimos logs da migração em busca de erros."""
-    log_pattern = "logs/*.log"
-    files = sorted(glob.glob(log_pattern), key=os.path.getmtime, reverse=True)
-    
+def list_migration_projects() -> str:
+    """Lista todos os diretórios de migração (MIGRACAO_*) encontrados."""
+    root = Path(__file__).parent.parent
+    dirs = sorted([d.name for d in root.glob("MIGRACAO_*") if d.is_dir()], reverse=True)
+    if not dirs:
+        return "Nenhum diretório MIGRACAO_ encontrado."
+    return "Projetos de migração detectados: " + ", ".join(dirs)
+
+@mcp.tool()
+def check_migration_logs(lines: int = 50, filter_error: bool = True) -> str:
+    """
+    Verifica os logs da migração.
+    - lines: quantidade de linhas do final do arquivo.
+    - filter_error: se True, retorna apenas linhas com ERROR, WARNING, EXCEPTION ou TRACEBACK.
+    """
+    # Busca logs no diretório raiz e em subpastas de projeto (MIGRACAO_*)
+    log_patterns = ["logs/*.log", "MIGRACAO_*/logs/*.log", "work/logs/*.log"]
+    files = []
+    for pattern in log_patterns:
+        files.extend(glob.glob(pattern))
+
+    # Ordena por data de modificação (mais recentes primeiro)
+    files = sorted(files, key=os.path.getmtime, reverse=True)
+
     if not files:
-        return "Nenhum arquivo de log encontrado na pasta /logs."
-    
-    latest_log = files[0]
+        return "Nenhum arquivo de log encontrado nos locais pesquisados (./logs, MIGRACAO_*/logs)."
+
+    # Vamos verificar os 3 arquivos mais recentes se houver filtro de erro, ou apenas o 1º se não houver
+    files_to_check = files[:3] if filter_error else files[:1]
+    output = []
+
+    for log_path in files_to_check:
+        try:
+            with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.readlines()
+                last_lines = content[-lines:]
+
+                if filter_error:
+                    matches = [line.strip() for line in last_lines 
+                               if any(x in line.upper() for x in ["ERROR", "EXCEPTION", "TRACEBACK", "WARNING", "FAIL"])]
+                    if matches:
+                        output.append(f"--- Arquivo: {log_path} (Apenas Erros/Avisos) ---")
+                        output.extend(matches[-20:]) # Limita a 20 erros por arquivo para economizar tokens
+                    continue
+
+                output.append(f"--- Arquivo: {log_path} (Últimas {lines} linhas) ---")
+                output.extend([l.strip() for l in last_lines])
+        except Exception as e:
+            output.append(f"Erro ao ler log {log_path}: {e}")
+
+    if not output:
+        return "Nenhum erro encontrado nos logs recentes ou arquivos estão vazios."
+
+    return "\n".join(output)
+
+@mcp.tool()
+def get_firebird_table_count(table_name: str) -> str:
+    """Conta registros no Firebird usando conexão segura (ReadOnly)."""
+    return get_firebird_table_count_safe(table_name)
+
+@mcp.tool()
+def get_firebird_table_count_safe(table_name: str) -> str:
+    """Conta registros no Firebird usando conexão segura (ReadOnly)."""
     try:
-        with open(latest_log, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.readlines()
-            last_lines = content[-lines:]
-            errors = [line for line in last_lines if "ERROR" in line.upper() or "TRACEBACK" in line.upper() or "EXCEPTION" in line.upper()]
-            
-            result = f"Arquivo: {latest_log}\n"
-            if errors:
-                result += "ERROS ENCONTRADOS:\n" + "".join(errors)
-            else:
-                result += "Nenhum erro óbvio nas últimas linhas."
-            return result
+        conn = get_safe_fb_connection()
+        cur = conn.cursor()
+        cur.execute(f'SELECT count(*) FROM "{table_name.upper()}"')
+        count = cur.fetchone()[0]
+        conn.close()
+        return f"Tabela {table_name.upper()}: {count} registros."
     except Exception as e:
-        return f"Erro ao ler log: {e}"
+        return f"Erro ao contar registros no Firebird (ReadOnly): {e}"
 
 @mcp.tool()
 def run_count_comparison() -> str:
@@ -142,19 +191,6 @@ def open_html_report() -> str:
         return f"Erro ao abrir arquivo: {e}"
 
 @mcp.tool()
-def get_firebird_table_count_safe(table_name: str) -> str:
-    """Conta registros no Firebird usando conexão segura."""
-    try:
-        conn = get_safe_fb_connection()
-        cur = conn.cursor()
-        cur.execute(f"SELECT count(*) FROM {table_name.upper()}")
-        count = cur.fetchone()[0]
-        conn.close()
-        return f"Tabela {table_name.upper()}: {count} registros."
-    except Exception as e:
-        return f"Erro (ReadOnly): {e}"
-
-@mcp.tool()
 def execute_readonly_sql_postgres(sql: str) -> str:
     """Executa SQL SELECT no Postgres usando conexão segura."""
     if "SELECT" not in sql.upper():
@@ -167,7 +203,7 @@ def execute_readonly_sql_postgres(sql: str) -> str:
         conn.close()
         return str(rows)
     except Exception as e:
-        return f"Erro (ReadOnly): {e}"
+        return f"Erro ao executar SQL no Postgres (ReadOnly): {e}"
 
 if __name__ == "__main__":
     mcp.run()

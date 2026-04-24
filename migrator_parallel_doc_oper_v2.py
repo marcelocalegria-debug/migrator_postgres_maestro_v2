@@ -177,7 +177,12 @@ def _convert_blob(val, blob_subtype: int, charset: str):
     if val is None:
         return None
     if hasattr(val, 'read'):
-        val = val.read()
+        blob_obj = val
+        try:
+            val = blob_obj.read()
+        finally:
+            if hasattr(blob_obj, 'close'):
+                blob_obj.close()
     elif isinstance(val, memoryview):
         val = bytes(val)
     if blob_subtype == 1:
@@ -982,9 +987,9 @@ Nota: não mude --threads entre execuções sem usar --reset.
     #  FASE 0 — Constraints
     # ══════════════════════════════════════════════════════════
     log.info('')
-    log.info('━' * 70)
+    log.info('=' * 70)
     log.info('  Fase 0 — Coleta de DDLs e scripts de constraints')
-    log.info('━' * 70)
+    log.info('=' * 70)
 
     cman  = ConstraintManager(pg_params, schema, DEST_TABLE)
     n_obj = cman.collect_all()
@@ -1012,9 +1017,9 @@ Nota: não mude --threads entre execuções sem usar --reset.
     #  FASE 1 — Preparação
     # ══════════════════════════════════════════════════════════
     log.info('')
-    log.info('━' * 70)
+    log.info('=' * 70)
     log.info('  Fase 1 — Preparação e particionamento')
-    log.info('━' * 70)
+    log.info('=' * 70)
 
     columns   = discover_columns(config)
     blob_cols = [c.name for c in columns if c.is_blob]
@@ -1089,13 +1094,20 @@ Nota: não mude --threads entre execuções sem usar --reset.
     #  FASE 2 — Carga paralela
     # ══════════════════════════════════════════════════════════
     log.info('')
-    log.info('━' * 70)
+    log.info('=' * 70)
     log.info(f'  Fase 2 — Carga paralela ({n_threads} threads)')
-    log.info('━' * 70)
+    log.info('=' * 70)
 
     # Estado agregado para monitor.py
     master_state_path = args.master_db if args.master_db else WORK_DIR / f'migration_state_{DEST_TABLE}.db'
     master_state      = StateManager(master_state_path, migration_id=args.migration_id, table_name=SOURCE_TABLE)
+    
+    # [CHECK] Se já estiver concluído, encerra
+    saved = master_state.load_progress()
+    if saved and saved.status == 'completed' and not args.reset:
+        log.info(f'  [INFO] Tabela {SOURCE_TABLE} já concluída anteriormente. Pulando.')
+        sys.exit(0)
+
     if not any_restart:
         master_state.reset()
     master_state.save_progress(MigrationProgress(
@@ -1167,12 +1179,10 @@ Nota: não mude --threads entre execuções sem usar --reset.
         total_rows=total_rows,
         rows_migrated=total_migrated, rows_failed=total_failed,
         status=final_status,
-        phase='loaded' if final_status == 'completed' else final_status,
-        elapsed_seconds=elapsed,
         speed_rows_per_sec=(total_migrated / elapsed if elapsed > 0 else 0.0),
         completed_at=(datetime.now().isoformat() if final_status == 'completed' else None),
         updated_at=datetime.now().isoformat(),
-        constraints_disabled=True, pk_columns=PK_COLS,
+        pk_columns=PK_COLS,
     ))
 
     log.info('')
@@ -1204,3 +1214,4 @@ Nota: não mude --threads entre execuções sem usar --reset.
 
 if __name__ == '__main__':
     main()
+main()

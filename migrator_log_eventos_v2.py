@@ -167,7 +167,12 @@ def _convert_blob(val, blob_subtype: int, charset: str):
     if val is None:
         return None
     if hasattr(val, 'read'):
-        val = val.read()
+        blob_obj = val
+        try:
+            val = blob_obj.read()
+        finally:
+            if hasattr(blob_obj, 'close'):
+                blob_obj.close()
     elif isinstance(val, memoryview):
         val = bytes(val)
     if blob_subtype == 1:
@@ -678,7 +683,7 @@ class WorkerThread(threading.Thread):
 
         pct    = (migrated / total * 100) if total > 0 else 0
         filled = int(30 * pct / 100)
-        bar    = '█' * filled + '░' * (30 - filled)
+        bar    = '#' * filled + '-' * (30 - filled)
         self.log.info(
             f'  [{bar}] {pct:5.1f}% | {migrated:>12,}/{total:>12,} | '
             f'Lote {batch_num:>5,} | {speed:>10,.0f} lin/s | '
@@ -1073,6 +1078,13 @@ Monitor:
 
     master_state_path = args.master_db if args.master_db else WORK_DIR / f'migration_state_{DEST_TABLE}.db'
     master_state      = StateManager(master_state_path, migration_id=args.migration_id, table_name=SOURCE_TABLE)
+    
+    # [CHECK] Se já estiver concluído, encerra
+    saved = master_state.load_progress()
+    if saved and (saved.status == 'completed' or saved.status == 'loaded') and not args.reset:
+        log.info(f'  [INFO] Tabela {SOURCE_TABLE} já concluída anteriormente. Pulando.')
+        sys.exit(0)
+
     if not any_restart:
         master_state.reset()
     master_state.save_progress(MigrationProgress(
@@ -1134,9 +1146,9 @@ Monitor:
     master_state.save_progress(MigrationProgress(
         source_table=SOURCE_TABLE, dest_table=DEST_TABLE,
         total_rows=total_rows, rows_migrated=total_migrated,
-        rows_failed=total_failed, status=final_status, phase=final_status,
-        elapsed_seconds=elapsed, completed_at=datetime.now().isoformat(),
-        use_db_key=True, constraints_disabled=True,
+        rows_failed=total_failed, status=final_status,
+        completed_at=datetime.now().isoformat(),
+        use_db_key=True,
         speed_rows_per_sec=(total_migrated / elapsed if elapsed > 0 else 0),
         updated_at=datetime.now().isoformat()))
 

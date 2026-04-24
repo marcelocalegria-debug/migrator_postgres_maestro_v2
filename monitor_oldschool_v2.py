@@ -39,57 +39,213 @@ BASE_DIR = Path(__file__).parent
 WORK_DIR = BASE_DIR / 'work'
 LOG_DIR  = BASE_DIR / 'logs'
 
+
+# ─── helpers ────────────────────────────────────────────────────────────────
+
+def _fd(s) -> str:
+    """Formata duração em segundos para string legível."""
+    if not s or s < 0:
+        return 'N/A'
+    s = int(s)
+    h, r = divmod(s, 3600)
+    m, s = divmod(r, 60)
+    return f'{h}h{m:02d}m{s:02d}s' if h else (f'{m}m{s:02d}s' if m else f'{s}s')
+
+
+def _bar(pct: float, width: int = 20) -> str:
+    filled = int(width * pct / 100)
+    return '█' * filled + '░' * (width - filled)
+
+
+STATUS_COLOR = {
+    'running':   'green',
+    'completed': 'blue',
+    'paused':    'yellow',
+    'error':     'red',
+    'idle':      'dim',
+}
+
+
+def _status_color(status: str) -> str:
+    return STATUS_COLOR.get(status, 'white')
+
+
+def _calc_pct(p: dict) -> float:
+    """Percentual de progresso; força 100% quando status é completed/loaded."""
+    if p.get('status', '') in ('completed', 'loaded'):
+        return 100.0
+    m = p.get('rows_migrated', 0)
+    t = p.get('total_rows', 0)
+    return (m / t * 100) if t else 0
+
+
+# ─── leitura de estado ───────────────────────────────────────────────────────
+
+def _read_progress(db_path: Path, retries: int = 3) -> dict:
+    """Lê o progresso de um migration_state_*.db. Retorna {} em caso de erro."""
+    if not db_path.exists():
+        return {}
+    for attempt in range(retries):
+        try:
+            conn = sqlite3.connect(str(db_path), timeout=3)
+            conn.execute('PRAGMA journal_mode=WAL')
+            row = conn.execute(
+                "SELECT progress_json FROM migration_state WHERE id=1"
+            ).fetchone()
+            conn.close()
+            return json.loads(row[0]) if row else {}
+        except sqlite3.OperationalError as e:
+            if 'locked' in str(e) and attempt < retries - 1:
+                time.sleep(0.1)
+            else:
+                return {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _read_recent(db_path: Path, n: int = 6, retries: int = 3) -> list:
+    """Lê os últimos N batches de um migration_state_*.db."""
+    if not db_path.exists():
+        return []
+    for attempt in range(retries):
+        try:
+            conn = sqlite3.connect(str(db_path), timeout=3)
+            conn.execute('PRAGMA journal_mode=WAL')
+            rows = conn.execute("""
+                SELECT timestamp, batch_number, rows_in_batch, total_rows,
+                       speed_rps, eta_seconds, message
+                FROM migration_log ORDER BY id DESC LIMIT ?
+            """, (n,)).fetchall()
+            conn.close()
+            return rows
+        except sqlite3.OperationalError as e:
+            if 'locked' in str(e) and attempt < retries - 1:
+                time.sleep(0.1)
+            else:
+                return []
+        except Exception:
+            return []
+    return []
+
+
+# Tabelas grandes migradas pelo migrator.py / migrator_parallel_doc_oper.py
+BIG_TABLES = {
+    'documento_operacao',
+    'log_eventos',
+    'historico_operacao',
+    'ocorrencia_sisat',
+    'ocorrencia',
+    'nmov',
+    'operacao_credito',
+    'parcelasctb',
+    'pessoa_pretendente',
+    'controleversao',
+}
+
+
 def _discover_dbs() -> list[Path]:
-    """Descobre todos os migration_state_*.db na raiz, em work/ e em subpastas MIGRACAO_XXXX."""
-    dbs = list(WORK_DIR.glob('migration_state_*.db'))
-    # Também busca em subpastas de migração do Maestro V2
-    for mig_dir in BASE_DIR.glob('MIGRACAO_*'):
-        if mig_dir.is_dir():
-            # Busca tanto na raiz da pasta de migração quanto em subpastas work dela
-            dbs.extend(mig_dir.glob('migration_state_*.db'))
-            dbs.extend((mig_dir / 'work').glob('migration_state_*.db'))
-    
-    # Remove duplicatas se houver (mesmo caminho) e ordena
-    unique_dbs = {p.resolve(): p for p in dbs}
-    return sorted(unique_dbs.values(), key=lambda x: x.name)
+    """Descobre todos os migration_state_*.db no diretório do script."""
+    return sorted(WORK_DIR.glob('migration_state_*.db'))
+
+
+def _filter_dbs(dbs: list, only: set) -> list:
+    """
+    Filtra lista de DBs mantendo os cujo nome está em `only` (exato)
+    OU cujo nome começa com algum prefixo de `only` (cobre threads _tN).
+    Ex.: 'documento_operacao' em `only` inclui 'documento_operacao_t0', '_t1', etc.
+    """
+    result = []
+    for d in dbs:
+        name = d.stem.removeprefix('migration_state_')
+        if name in only:
+            result.append(d)
+            continue
+        if any(name.startswith(prefix + '_t') for prefix in only):
+            result.append(d)
+    return result
+
+
+def _read_master_state(db_path: Path) -> dict:
+    """
+    Lê o master state das tabelas pequenas.
+    Retorna dict com summary + lista de tabelas running/recently active.
+    """
+    result = {
+        'summary': {'pending': 0, 'running': 0, 'completed': 0, 'failed': 0, 'total': 0},
+        'running_tables': [],
+        'recent_failed': [],
+    }
+    if not db_path.exists():
+        return result
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=3)
+        conn.execute('PRAGMA journal_mode=WAL')
+
+        # Sumário por status
+        for status, count in conn.execute(
+                "SELECT status, COUNT(*) FROM table_status GROUP BY status").fetchall():
+            if status in result['summary']:
+                result['summary'][status] = count
+            result['summary']['total'] += count
+
+        # Tabelas em execução
+        result['running_tables'] = [
+            {'source': r[0], 'dest': r[1], 'started_at': r[2]}
+            for r in conn.execute("""
+                SELECT source_table, dest_table, started_at
+                FROM table_status WHERE status = 'running'
+                ORDER BY started_at
+            """).fetchall()
+        ]
+
+        # Tabelas com falha
+        result['recent_failed'] = [
+            {'source': r[0], 'error': r[1]}
+            for r in conn.execute("""
+                SELECT source_table, error_msg
+                FROM table_status WHERE status = 'failed'
+                ORDER BY source_table LIMIT 10
+            """).fetchall()
+        ]
+        conn.close()
+    except Exception:
+        pass
+    return result
+
+
+# ─── exibição multi-tabela ───────────────────────────────────────────────────
 
 def _build_multi_table(dbs: list[Path]) -> Table:
     """Monta a rich.Table com uma linha por migração."""
     tbl = Table(
-        title=f'  Quadro Geral de Migracoes  |  {datetime.now().strftime("%H:%M:%S")}',
+        title=f'  Migracoes em Paralelo  |  {datetime.now().strftime("%H:%M:%S")}',
         header_style='bold cyan',
         box=box.ROUNDED,
         show_lines=True,
         expand=True,
     )
-    tbl.add_column('Sessão/Pasta', style='dim', width=15)
     tbl.add_column('Tabela',    style='bold',  min_width=18)
     tbl.add_column('Status',    justify='center', min_width=10)
     tbl.add_column('Progresso', min_width=28)
     tbl.add_column('Linhas',    justify='right', min_width=22)
     tbl.add_column('Vel (l/s)', justify='right', min_width=10)
     tbl.add_column('ETA',       justify='right', min_width=10)
+    tbl.add_column('Decorrido', justify='right', min_width=10)
+    tbl.add_column('Atualizado',justify='right', min_width=8, style='dim')
 
     totals_m = 0
     totals_t = 0
 
     for db_path in dbs:
         p = _read_progress(db_path)
-        
-        # Identifica a sessão (MIGRACAO_XXXX)
-        parts = db_path.parts
-        session = "RAIZ"
-        for part in parts:
-            if part.startswith("MIGRACAO_"):
-                session = part
-                break
 
         if not p:
             # DB existe mas sem dados ainda
             name = db_path.stem.removeprefix('migration_state_')
-            tbl.add_row(session, name, Text('AGUARDANDO', style='dim'),
+            tbl.add_row(name, Text('AGUARDANDO', style='dim'),
                         Text(_bar(0) + '   0.00%', style='dim'),
-                        '-', '-', '-')
+                        '-', '-', '-', '-', '-')
             continue
 
         src   = p.get('source_table', '?')
@@ -113,31 +269,49 @@ def _build_multi_table(dbs: list[Path]) -> Table:
 
         spd  = p.get('speed_rows_per_sec', 0) or 0
         eta  = p.get('eta_seconds') or 0
+        elp  = p.get('elapsed_seconds', 0) or 0
+        upd  = str(p.get('updated_at', ''))
+
+        # Tempo desde último update (para detectar processo parado)
+        age_str = ''
+        if upd:
+            try:
+                updated_dt = datetime.fromisoformat(upd)
+                age = (datetime.now() - updated_dt).total_seconds()
+                if age > 30 and status == 'running':
+                    age_str = Text(f'{int(age)}s', style='bold red')
+                else:
+                    age_str = upd[11:19]
+            except Exception:
+                age_str = upd[11:19]
+
+        err = p.get('error_message')
+        if err:
+            label += f'\n[red]{err[:40]}[/red]'
 
         tbl.add_row(
-            session,
             label,
             status_text,
             progress_text,
             rows_text,
             f'{spd:>10,.0f}',
             _fd(eta),
+            _fd(elp),
+            age_str if isinstance(age_str, str) else age_str,
         )
 
     # Linha de totais
     if totals_t > 0:
         pct_total = (totals_m / totals_t * 100)
         tbl.add_row(
-            'TOTAL GERAL',
-            '',
+            Text('TOTAL', style='bold'),
             '',
             Text(f'{_bar(pct_total, 20)}  {pct_total:5.2f}%', style='bold cyan'),
             Text(f'{totals_m:>12,} / {totals_t:>12,}', style='bold'),
-            '', '',
+            '', '', '', '',
         )
 
     return tbl
-
 
 
 def display_live_all(interval: float = 2.0, only: set = None):

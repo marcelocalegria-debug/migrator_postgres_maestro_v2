@@ -139,20 +139,26 @@ class MigrationAIAgent:
         return tools
 
     def _get_skills_instructions(self) -> str:
-        """Lê arquivos .md da pasta skills/ para adicionar às instruções do agente."""
+        """Lê arquivos .md dentro de subpastas em skills/ para adicionar às instruções do agente."""
         skills_dir = self.root_dir / "skills"
         skills_text = ""
         if skills_dir.exists():
-            for skill_file in skills_dir.glob("*.md"):
-                with open(skill_file, "r", encoding="utf-8") as f:
-                    skills_text += f"\n\n--- SKILL: {skill_file.name} ---\n"
-                    skills_text += f.read()
+            # Busca recursiva por arquivos SKILL.md ou *.md em subdiretórios
+            for skill_file in skills_dir.rglob("*.md"):
+                try:
+                    with open(skill_file, "r", encoding="utf-8") as f:
+                        skills_text += f"\n\n--- SKILL: {skill_file.parent.name} ({skill_file.name}) ---\n"
+                        skills_text += f.read()
+                except Exception as e:
+                    logging.error(f"Erro ao carregar skill {skill_file}: {e}")
         return skills_text
 
     def _build_agent(self) -> Agent:
         """Define o comportamento, as ferramentas e a identidade do agente."""
+        skills_context = self._get_skills_instructions()
+        
         instruction = f"""Você é um Engenheiro de Dados especialista em migração Firebird -> PostgreSQL.
-PROJETO: {self.project_path.name}
+PROJETO ATUAL: {self.project_path.name}
 
 DIRETRIZES DE RESPOSTA:
 1. Seja EXTREMAMENTE CONCISO. Use tabelas para dados e blocos de código para SQL.
@@ -160,9 +166,16 @@ DIRETRIZES DE RESPOSTA:
 3. Não responda sobre assuntos fora do escopo de migração de banco de dados.
 4. Se uma ferramenta falhar ou der timeout, informe o erro técnico brevemente e sugira o próximo passo manual.
 
+MONITORAMENTO:
+- Para monitorar o progresso, o usuário deve rodar: `python monitor.py --migration-db {self.project_path.name}/migration.db`
+- O script `monitor.py` é a ferramenta visual principal para acompanhar a migração em tempo real.
+
 CONTEXTO TÉCNICO:
 - Firebird 3.0 (WIN1252) -> PostgreSQL 18+ (UTF8/LATIN1).
 - O processo utiliza COPY para alta performance.
+- O banco de controle da migração é o `{self.project_path.name}/migration.db`.
+
+{skills_context}
 """
         return Agent(
             name="FirebirdToPostgresAgent",

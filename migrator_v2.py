@@ -204,7 +204,12 @@ def _convert_blob(val, blob_subtype: int, charset: str) -> Optional[bytes]:
 
     # Ler conteúdo se for file-like (fdb BLOB locator)
     if hasattr(val, 'read'):
-        val = val.read()
+        blob_obj = val
+        try:
+            val = blob_obj.read()
+        finally:
+            if hasattr(blob_obj, 'close'):
+                blob_obj.close()
     elif isinstance(val, memoryview):
         val = bytes(val)
 
@@ -811,6 +816,10 @@ class FirebirdToPgMigrator:
         # -- Checkpoint ---------------------------------------
         saved      = self._state.load_progress()
         is_restart = False
+
+        if saved and saved.status == 'completed' and not self.reset_state:
+            self.log.info(f'  [INFO] Tabela {source} já concluída anteriormente. Pulando.')
+            return
 
         if (saved and saved.status in ('running', 'paused', 'failed')
                 and saved.rows_migrated > 0):

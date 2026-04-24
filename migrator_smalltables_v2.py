@@ -127,7 +127,13 @@ def _fb_charset_to_python(fb_charset: str) -> str:
 
 def _convert_blob(val, blob_subtype: int, charset: str) -> Optional[bytes]:
     if val is None: return None
-    if hasattr(val, 'read'): val = val.read()
+    if hasattr(val, 'read'):
+        blob_obj = val
+        try:
+            val = blob_obj.read()
+        finally:
+            if hasattr(blob_obj, 'close'):
+                blob_obj.close()
     elif isinstance(val, memoryview): val = bytes(val)
     if blob_subtype == 1:
         enc = _fb_charset_to_python(charset)

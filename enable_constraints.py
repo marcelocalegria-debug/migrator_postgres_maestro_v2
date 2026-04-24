@@ -540,9 +540,9 @@ Exemplos:
 
     for table, sql_file in ordered_tables:
         log.info('')
-        log.info(f'━' * 70)
+        log.info(f'=' * 70)
         log.info(f'  Tabela: {table}  ({sql_file.name})')
-        log.info(f'━' * 70)
+        log.info(f'=' * 70)
 
         stmts = parse_sql_file(sql_file)
         log.info(f'  {len(stmts)} statements encontrados')

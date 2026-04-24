@@ -33,15 +33,23 @@ class MigrationProgress:
 
     def to_dict(self):
         d = asdict(self)
+        
+        def _serial(obj):
+            if isinstance(obj, (datetime)):
+                return obj.isoformat()
+            if isinstance(obj, (bytes, memoryview)):
+                return obj.hex()
+            return obj
+
         # bytes e memoryview não são JSON-serializáveis
         if isinstance(d.get('last_db_key'), (bytes, memoryview)):
             d['last_db_key'] = d['last_db_key'].hex() if d['last_db_key'] else None
         
-        # Garante que last_pk_value seja serializável (ex: bytes de GUIDs)
-        if isinstance(d.get('last_pk_value'), (bytes, memoryview)):
-             d['last_pk_value'] = d['last_pk_value'].hex()
+        # Garante que last_pk_value seja serializável (ex: bytes de GUIDs, datetimes)
+        if isinstance(d.get('last_pk_value'), (bytes, memoryview, datetime)):
+             d['last_pk_value'] = _serial(d['last_pk_value'])
         elif isinstance(d.get('last_pk_value'), list):
-             d['last_pk_value'] = [v.hex() if isinstance(v, (bytes, memoryview)) else v for v in d['last_pk_value']]
+             d['last_pk_value'] = [_serial(v) for v in d['last_pk_value']]
              
         return d
 
@@ -132,6 +140,13 @@ class StateManager:
             
             # Mapeia MigrationProgress para os campos da tabela 'tables' do MigrationDB
             data = p.to_dict()
+            
+            # Se for uma migração por RDB$DB_KEY, usamos o last_db_key como last_pk_value no banco mestre
+            # para que o monitor consiga exibir o checkpoint corretamente.
+            effective_last_pk = data['last_pk_value']
+            if p.use_db_key and p.last_db_key:
+                effective_last_pk = data['last_db_key']
+
             update_fields = {
                 'total_rows': p.total_rows,
                 'rows_migrated': p.rows_migrated,
@@ -139,8 +154,8 @@ class StateManager:
                 'current_batch': p.current_batch,
                 'total_batches': p.total_batches,
                 'batch_size': p.batch_size,
-                'last_pk_value': json.dumps(p.last_pk_value) if p.last_pk_value is not None else None,
-                'pk_columns': json.dumps(p.pk_columns),
+                'last_pk_value': json.dumps(effective_last_pk, default=str) if effective_last_pk is not None else None,
+                'pk_columns': json.dumps(p.pk_columns, default=str),
                 'use_db_key': p.use_db_key,
                 'status': p.status,
                 'speed_rows_per_sec': p.speed_rows_per_sec,

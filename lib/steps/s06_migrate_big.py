@@ -38,6 +38,12 @@ class MigrateBigStep(StepBase):
         
         # 1. Inicia Migradores Especializados
         for table, script in specialized:
+            # Verifica status da tabela antes de iniciar
+            t_info = self.db.get_table_by_name(self.migration_id, table)
+            if t_info and t_info['status'] == 'completed':
+                print(f"  [SKIP] {table} já concluída.")
+                continue
+
             print(f"Iniciando especializado: {table}...")
             cmd = [
                 sys.executable, script,
@@ -52,6 +58,12 @@ class MigrateBigStep(StepBase):
 
         # 2. Inicia Migradores V2 para o restante das Big Tables
         for table in universal_v2:
+            # Verifica status da tabela antes de iniciar
+            t_info = self.db.get_table_by_name(self.migration_id, table)
+            if t_info and t_info['status'] == 'completed':
+                print(f"  [SKIP] {table} já concluída.")
+                continue
+
             print(f"Iniciando V2: {table}...")
             cmd = [
                 sys.executable, 'migrator_v2.py',
