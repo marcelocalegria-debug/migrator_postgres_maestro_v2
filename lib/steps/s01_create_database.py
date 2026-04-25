@@ -57,26 +57,35 @@ class CreateDatabaseStep(StepBase):
                 self._print_manual_sql(target_db, target_user, target_ts)
                 return False
 
-            # 4. Validação de Ownership e Tablespace do Banco
+            # 4. Validação de Ownership, Tablespace e Encoding do Banco
             cur.execute("""
-                SELECT pg_catalog.pg_get_userbyid(datdba), spcname 
+                SELECT 
+                    pg_catalog.pg_get_userbyid(datdba), 
+                    spcname,
+                    pg_encoding_to_char(encoding)
                 FROM pg_database d 
                 JOIN pg_tablespace t ON d.dattablespace = t.oid 
                 WHERE datname = %s
             """, (target_db,))
-            owner, ts = cur.fetchone()
+            owner, ts, encoding = cur.fetchone()
             
             if owner != target_user:
                 print(f"[WARNING] O owner do banco '{target_db}' é '{owner}', mas o config espera '{target_user}'.")
             
             if ts != target_ts:
                 print(f"[ERROR] O banco '{target_db}' está na tablespace '{ts}', mas o config espera '{target_ts}'.")
+                self._print_manual_sql(target_db, target_user, target_ts)
+                return False
+
+            if encoding != 'LATIN1':
+                print(f"[ERROR] O banco '{target_db}' está com encoding '{encoding}', mas a premissa do projeto exige 'LATIN1'.")
+                self._print_manual_sql(target_db, target_user, target_ts)
                 return False
 
             cur.close()
             conn.close()
             
-            print(f"[OK] Ambiente PostgreSQL validado com sucesso para '{target_db}'.")
+            print(f"[OK] Ambiente PostgreSQL validado com sucesso para '{target_db}' (LATIN1).")
             return True
 
         except Exception as e:

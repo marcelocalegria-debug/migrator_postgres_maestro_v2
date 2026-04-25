@@ -5,7 +5,7 @@ Gera relatório HTML detalhado da comparação de estruturas.
 Pode ser executado após o script principal ou de forma independente.
 
 Uso:
-    python gera_relatorio_html.py [--config config.yaml] [--output relatorio.html]
+    python gera_relatorio_compara_estrutura_fb2pg_html.py --work-dir MIGRACAO_0001 [--config config.yaml] [--output relatorio.html]
 """
 
 import argparse
@@ -452,14 +452,30 @@ def main():
     parser = argparse.ArgumentParser(
         description='Gera relatório HTML da comparação Firebird vs PostgreSQL'
     )
-    parser.add_argument('--config', default='config.yaml', help='Caminho do config.yaml')
+    parser.add_argument('--work-dir', required=True, help='Diretório da migração (ex: MIGRACAO_0001)')
+    parser.add_argument('--config', default=None, help='Caminho do config.yaml (default: {work_dir}/config.yaml)')
     parser.add_argument('--schema', default=None, help='Schema PostgreSQL')
-    parser.add_argument('--output', default='relatorio_migracao.html', help='Arquivo HTML de saída')
+    parser.add_argument('--output', default=None, help='Arquivo HTML de saída (default: {work_dir}/reports/relatorio_estrutura.html)')
     args = parser.parse_args()
 
-    config_path = Path(args.config)
+    work_dir = Path(args.work_dir)
+    if not work_dir.exists():
+        sys.exit(f'Erro: work-dir não encontrado: {work_dir}')
+
+    config_path = Path(args.config) if args.config else work_dir / 'config.yaml'
     if not config_path.exists():
         sys.exit(f'Erro: config não encontrado: {config_path}')
+
+    # Definir output padrão se não informado
+    if args.output:
+        output_path = Path(args.output)
+    else:
+        reports_dir = work_dir / 'reports'
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        output_path = reports_dir / 'relatorio_estrutura.html'
+
+    # Garantir que o diretório do output existe
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(config_path, encoding='utf-8') as f:
         cfg = yaml.safe_load(f)
@@ -498,7 +514,7 @@ def main():
     pg_conn.close()
 
     print('Gerando relatório HTML...')
-    generate_html_report(results, only_fb, only_pg, args.output)
+    generate_html_report(results, only_fb, only_pg, output_path)
 
 
 if __name__ == '__main__':

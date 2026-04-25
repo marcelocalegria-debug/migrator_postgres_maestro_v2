@@ -150,7 +150,10 @@ def _copy_escape(val) -> str:
     if isinstance(val, bool): return 't' if val else 'f'
     if isinstance(val, (int, float)): return str(val)
     if hasattr(val, 'isoformat'): return val.isoformat()
-    s = str(val).replace('\x00', '')
+    s = str(val)
+    # Sanitize for PostgreSQL LATIN1 databases strictly rejecting WIN1252 chars
+    s = s.encode('latin-1', errors='replace').decode('latin-1')
+    if '\x00' in s: s = s.replace('\x00', '')
     return (s.replace('\\', '\\\\').replace('\t', '\\t')
              .replace('\n', '\\n').replace('\r', '\\r'))
 
@@ -243,6 +246,22 @@ class FirebirdToPgMigrator:
         conn.set_client_encoding('UTF8'); conn.autocommit = False
         return conn
 
+    def _truncate_dest(self, table_name: str):
+        cfg = self.config.get('postgres') or self.config.get('postgresql')
+        schema = cfg.get('schema', 'public')
+        table = table_name.lower()
+        conn = self._pg_conn()
+        cur = conn.cursor()
+        try:
+            cur.execute(f'TRUNCATE TABLE "{schema}"."{table}" CASCADE')
+            conn.commit()
+            self.log.info(f'  [{table_name}] Destino truncado.')
+        except Exception as e:
+            conn.rollback()
+            self.log.warning(f'  [{table_name}] Falha ao truncar: {e}')
+        finally:
+            cur.close(); conn.close()
+
     def _discover_columns(self, table_name: str) -> List[ColumnMeta]:
         conn = self._fb_conn()
         try:
@@ -279,35 +298,76 @@ class FirebirdToPgMigrator:
         self._state = StateManager(state_db, migration_id=self.migration_id, table_name=source)
         
         saved = self._state.load_progress()
+        is_restart = False
+        
         if saved and saved.status == 'completed':
             self.log.info(f"  [{source}] Já concluída.")
             return
 
+        if saved and saved.status in ('running', 'paused', 'failed') and saved.rows_migrated > 0:
+            is_restart = True
+            self.log.info(f"  [{source}] RESTART - {saved.rows_migrated:,} linhas já migradas.")
+
         total_rows = self._count_rows(source)
-        self.progress = MigrationProgress(source_table=source, dest_table=dest, total_rows=total_rows,
-                                          status='running', started_at=datetime.now().isoformat(), category='small')
+        
+        if not is_restart:
+            self._truncate_dest(source)
+            self.progress = MigrationProgress(source_table=source, dest_table=dest, total_rows=total_rows,
+                                              status='running', started_at=datetime.now().isoformat(), category='small')
+        else:
+            self.progress = saved
+            self.progress.status = 'running'
+
         self._state.save_progress(self.progress)
+
+        cfg_m = self.config.get('migration', {})
+        batch_size = cfg_m.get('batch_size', 5000)
+        fetch_size = cfg_m.get('fetch_array_size', 5000)
 
         fb_conn, pg_conn = self._fb_conn(), self._pg_conn()
         try:
             self.columns = self._discover_columns(source)
             fb_cur = fb_conn.cursor()
-            fb_cur.execute(f'SELECT * FROM "{source.upper()}" ORDER BY RDB$DB_KEY')
+            fb_cur.arraysize = fetch_size
+            
+            # Montagem da query com suporte a restart (RDB$DB_KEY)
+            if is_restart and self.progress.last_db_key:
+                sql = f'SELECT * FROM "{source.upper()}" WHERE RDB$DB_KEY > ? ORDER BY RDB$DB_KEY'
+                params = (self.progress.last_db_key,)
+            else:
+                sql = f'SELECT * FROM "{source.upper()}" ORDER BY RDB$DB_KEY'
+                params = ()
+                
+            fb_cur.execute(sql, params)
             batch = []
             while not self._shutdown:
                 row = fb_cur.fetchone()
                 if not row:
-                    if batch: self._insert_batch(pg_conn, batch, 0, source)
+                    if batch:
+                        self._insert_batch(pg_conn, batch, 0, source)
+                        self.progress.rows_migrated += len(batch)
+                        # No Firebird, RDB$DB_KEY é a última coluna "escondida" do SELECT *
+                        # No smalltables, estamos fazendo SELECT * (que traz colunas + db_key se ordenado por ela)
+                        self._state.save_progress(self.progress)
                     break
                 batch.append(row)
-                if len(batch) >= 5000:
+                if len(batch) >= batch_size:
                     self._insert_batch(pg_conn, batch, 0, source)
                     self.progress.rows_migrated += len(batch)
+                    # Atualiza RDB$DB_KEY do último registro do batch para o Maestro
+                    if len(row) > len(self.columns):
+                        self.progress.last_db_key = row[-1]
                     self._state.save_progress(self.progress)
                     batch = []
             if not self._shutdown:
                 self.progress.status = 'completed'; self.progress.completed_at = datetime.now().isoformat()
                 self._state.save_progress(self.progress)
+        except Exception as e:
+            self.progress.status = 'failed'
+            self.progress.error_message = str(e)
+            self._state.save_progress(self.progress)
+            self.log.error(f"  FAIL [{source}] {str(e)}")
+            raise
         finally: fb_conn.close(); pg_conn.close()
 
     def _insert_batch(self, pg_conn, rows: list, batch_num: int, table_name: str):
@@ -329,35 +389,71 @@ class FirebirdToPgMigrator:
             else: out.append(val)
         return tuple(out)
 
-    def run_small_tables(self, n_workers: int = 4):
+    def run_small_tables(self, n_workers: int = None, only_table: str = None) -> bool:
         cfg_m = self.config.get('migration', {})
+        # [NOVO] Prioriza o argumento passado, senão busca do config.yaml, senão padrão 4
+        actual_workers = n_workers if n_workers is not None else cfg_m.get('parallel_workers', 4)
+        
         exclude = {t.strip().upper() for t in cfg_m.get('exclude_tables', [])}
-        fb_conn = self._fb_conn()
-        cur = fb_conn.cursor(); cur.execute("SELECT TRIM(r.RDB$RELATION_NAME) FROM RDB$RELATIONS r WHERE r.RDB$SYSTEM_FLAG=0 AND r.RDB$VIEW_BLR IS NULL")
-        pending = [{'source': r[0], 'dest': r[0].lower()} for r in cur.fetchall() if r[0].strip().upper() not in exclude]
-        fb_conn.close()
+        
+        if only_table:
+            pending = [{'source': only_table.upper(), 'dest': only_table.lower()}]
+            actual_workers = 1
+        else:
+            fb_conn = self._fb_conn()
+            cur = fb_conn.cursor(); cur.execute("SELECT TRIM(r.RDB$RELATION_NAME) FROM RDB$RELATIONS r WHERE r.RDB$SYSTEM_FLAG=0 AND r.RDB$VIEW_BLR IS NULL")
+            pending = [{'source': r[0], 'dest': r[0].lower()} for r in cur.fetchall() if r[0].strip().upper() not in exclude]
+            fb_conn.close()
 
-        self.log.info(f"Migrando {len(pending)} tabelas com {n_workers} workers.")
+        self.log.info(f"Migrando {len(pending)} tabelas com {actual_workers} workers.")
         args_list = [(self._config_path, t['source'], t['dest'], self.master_db_path, self.migration_id, str(WORK_DIR)) for t in pending]
         completed = 0
-        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        any_failed = False
+        with ProcessPoolExecutor(max_workers=actual_workers) as pool:
             futures = {pool.submit(_worker_migrate_table, a): a for a in args_list}
             for f in as_completed(futures):
                 res = f.result(); completed += 1
-                if res['status'] == 'completed': self.log.info(f"  OK [{res['table']}] {res['rows_migrated']:,} linhas | {completed}/{len(pending)}")
-                else: self.log.error(f"  FAIL [{res['table']}] FALHOU: {res['error']}")
+                if res['status'] == 'completed':
+                    self.log.info(f"  OK [{res['table']}] {res['rows_migrated']:,} linhas | {completed}/{len(pending)}")
+                else:
+                    self.log.error(f"  FAIL [{res['table']}] FALHOU: {res['error']}")
+                    any_failed = True
+        return any_failed
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument('-c', '--config', default='config.yaml')
-    p.add_argument('--small-tables', action='store_true')
+    p = argparse.ArgumentParser(description='Migrador Paralelo para Tabelas Pequenas')
+    p.add_argument('--work-dir', type=str, required=True, help='Diretório da migração (ex: MIGRACAO_0001)')
+    p.add_argument('-c', '--config', default=None, help='Caminho do config.yaml (padrão: work-dir/config.yaml)')
+    p.add_argument('--small-tables', action='store_true', help='Migra todas as tabelas (exceto exclude)')
+    p.add_argument('--table', type=str, help='Migra apenas UMA tabela específica')
     p.add_argument('--master-db', type=str)
     p.add_argument('--migration-id', type=int)
-    p.add_argument('--work-dir', type=str)
-    p.add_argument('--workers', type=int, default=4)
+    p.add_argument('--workers', type=int, default=None)
     args = p.parse_args()
-    m = FirebirdToPgMigrator(args.config, master_db_path=args.master_db, migration_id=args.migration_id, work_dir=args.work_dir)
-    if args.small_tables: m.run_small_tables(n_workers=args.workers)
+
+    # Define config padrão baseado no work-dir se não for informado
+    config_file = args.config if args.config else os.path.join(args.work_dir, 'config.yaml')
+
+    if not os.path.exists(config_file):
+        print(f"\n[MIGRATOR SMALL TABLES] Erro: Arquivo de configuração não encontrado: {config_file}")
+        sys.exit(1)
+
+    if not args.small_tables and not args.table:
+        print("\n[MIGRATOR SMALL TABLES] Erro: Você precisa informar --small-tables ou --table <NOME>.")
+        print("\nExemplos de execução ADHOC:")
+        print(f"  uv run {sys.argv[0]} --work-dir MIGRACAO_0001 --small-tables")
+        print(f"  uv run {sys.argv[0]} --work-dir MIGRACAO_0001 --table NOME_DA_TABELA")
+        sys.exit(1)
+
+    m = FirebirdToPgMigrator(config_file, master_db_path=args.master_db, migration_id=args.migration_id, work_dir=args.work_dir)
+    
+    failed = m.run_small_tables(n_workers=args.workers, only_table=args.table)
+    if failed:
+        print("\n[ERROR] Algumas tabelas pequenas falharam. Verifique os logs.")
+        sys.exit(1)
+    else:
+        print("\n[OK] Tabelas processadas.")
+        sys.exit(0)
 
 if __name__ == '__main__':
     main()

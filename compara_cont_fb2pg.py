@@ -8,7 +8,7 @@ Relatório:
   - Resumo: tabelas com diferença, só no Firebird, só no PostgreSQL
 
 Uso:
-    python compara_cont_fb2pg.py [--config config.yaml] [--schema public]
+    python compara_cont_fb2pg.py --work-dir MIGRACAO_XXXX [--config config.yaml] [--schema public]
 """
 
 import argparse
@@ -37,10 +37,6 @@ if os.name == "nt":
         if os.path.exists(_p):
             try:
                 fdb.load_api(_p)
-                break
-            except Exception:
-                pass
-
                 break
             except Exception:
                 pass
@@ -246,15 +242,50 @@ def _print_rich(rows: list[dict], only_fb: list, only_pg: list, diffs: list):
 
 # ─── Main ──────────────────────────────────────────────────────────────────────
 
+class Tee:
+    def __init__(self, *files):
+        self.files = files
+    def write(self, data):
+        for f in self.files:
+            f.write(data)
+            f.flush()
+    def flush(self):
+        for f in self.files:
+            f.flush()
+    def isatty(self):
+        return any(f.isatty() for f in self.files if hasattr(f, 'isatty'))
+
 def main():
     parser = argparse.ArgumentParser(description='Compara contagem de tabelas Firebird vs PostgreSQL')
-    parser.add_argument('--config', default='config.yaml', help='Caminho do config.yaml')
+    parser.add_argument('--work-dir', required=True, help='Diretório de trabalho da migração')
+    parser.add_argument('--config', default=None, help='Caminho do config.yaml (default: work-dir/config.yaml)')
     parser.add_argument('--schema', default=None, help='Schema PostgreSQL (default: lido do config)')
     args = parser.parse_args()
 
-    config_path = Path(args.config)
+    work_dir = Path(args.work_dir)
+    if not work_dir.exists():
+        sys.exit(f'Erro: diretório de trabalho não encontrado: {work_dir}')
+
+    config_path = Path(args.config) if args.config else work_dir / 'config.yaml'
     if not config_path.exists():
         sys.exit(f'Erro: config nao encontrado: {config_path}')
+
+    # Configura log
+    log_dir = work_dir / 'logs'
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / 'compare_counts.log'
+    
+    f_log = open(log_file, 'a', encoding='utf-8')
+    sys.stdout = Tee(sys.stdout, f_log)
+    sys.stderr = Tee(sys.stderr, f_log)
+
+    # Re-inicializa console Rich para usar o novo stdout
+    if HAS_RICH:
+        global console
+        if not sys.stdout.isatty():
+            console = Console(file=sys.stdout, force_terminal=True)
+        else:
+            console = Console(file=sys.stdout)
 
     with open(config_path, encoding='utf-8') as f:
         cfg = yaml.safe_load(f)
@@ -282,7 +313,7 @@ def main():
     only_pg = []
     diffs = []
 
-    print(f'Contando linhas em {total} tabelas...\n')
+    print(f'Comparando contagem de {total} tabelas...\n')
 
     for i, key in enumerate(all_keys, 1):
         in_fb = key in fb_map

@@ -253,19 +253,20 @@ def display_small_tables(master_db: Path, interval: float):
             title="SCCI Maestro V2", border_style="cyan"
         )
         
-        # Filtra para mostrar apenas o que está rodando ou falhou
-        running_sources = []
+        # Filtra para mostrar apenas o que está rodando ou falhou (Workers Ativos)
+        active_sources = []
         for t in state['all_tables']:
+            # No modo small-tables, ignoramos as big-tables neste painel
+            if t['source_table'] in BIG_TABLES_LIST:
+                continue
+                
             if t['status'] in ('running', 'error', 'failed'):
-                running_sources.append((master_db, t['source_table']))
+                active_sources.append((master_db, t['source_table']))
         
-        # Pega as últimas 5 concluídas para dar um feedback de movimento
-        completed = [t for t in state['all_tables'] if t['status'] in ('completed', 'loaded')]
-        completed.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
-        for t in completed[:5]:
-            running_sources.append((master_db, t['source_table']))
+        # Ordena por nome para evitar que as linhas fiquem pulando de posição
+        active_sources.sort(key=lambda x: x[1])
 
-        tbl = _build_main_table(running_sources, "Workers Ativos / Recentes")
+        tbl = _build_main_table(active_sources, "Workers Ativos (Migrando Agora)")
         return Group(header, tbl)
 
     with Live(build(), console=console, refresh_per_second=1/interval) as live:

@@ -137,12 +137,14 @@ def build_fk_sql(child_schema: str, child_table: str, conname: str,
             f'ON UPDATE {update_rule} ON DELETE {delete_rule};')
 
 
-def extract_rules_from_sql(sql: str) -> tuple[str, str]:
-    """Extrai ON UPDATE e ON DELETE do SQL original (fonte: PostgreSQL, autoritativa)."""
-    m = re.search(r'ON UPDATE (\w+(?: \w+)?) ON DELETE (\w+(?: \w+)?)', sql)
-    if m:
-        return m.group(1), m.group(2)
-    return 'NO ACTION', 'NO ACTION'
+def extract_rules_from_sql(sql: str) -> tuple[str | None, str | None]:
+    """Extrai ON UPDATE e ON DELETE do SQL original, ou None se não encontrar."""
+    m_upd = re.search(r'ON UPDATE\s+(RESTRICT|CASCADE|NO ACTION|SET NULL|SET DEFAULT)', sql, re.IGNORECASE)
+    m_del = re.search(r'ON DELETE\s+(RESTRICT|CASCADE|NO ACTION|SET NULL|SET DEFAULT)', sql, re.IGNORECASE)
+    
+    update_rule = m_upd.group(1).upper() if m_upd else None
+    delete_rule = m_del.group(1).upper() if m_del else None
+    return update_rule, delete_rule
 
 
 def repair_json(json_path: str, fk_map: dict) -> tuple[list, bool]:
@@ -176,7 +178,7 @@ def repair_json(json_path: str, fk_map: dict) -> tuple[list, bool]:
         parent_schema  = m_ref.group(1)
         parent_tbl_sql = m_ref.group(2)
 
-        # Regras: preservar do SQL original do PostgreSQL
+        # Regras: tentar extrair do SQL original do PostgreSQL
         update_rule, delete_rule = extract_rules_from_sql(sql)
 
         if conname not in fk_map:
@@ -184,13 +186,18 @@ def repair_json(json_path: str, fk_map: dict) -> tuple[list, bool]:
             continue
 
         info = fk_map[conname]
+        
+        # Fallback para regras do Firebird caso não consiga extrair
+        final_update_rule = update_rule if update_rule else info['update_rule']
+        final_delete_rule = delete_rule if delete_rule else info['delete_rule']
+
         new_sql = build_fk_sql(
             child_schema, child_tbl_sql, conname,
             info['child_cols'],
             parent_schema, parent_tbl_sql,
             info['parent_cols'],
-            update_rule,
-            delete_rule,
+            final_update_rule,
+            final_delete_rule,
         )
         print(f'  CORRIGIDO: {conname}')
         print(f'    ANTES: {sql}')

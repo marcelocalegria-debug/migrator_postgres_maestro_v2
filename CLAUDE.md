@@ -17,7 +17,7 @@ The project has two layers:
 
 ### Maestro V2
 
-Primary entry point. Interactive CLI built with `prompt_toolkit` + `rich`. Commands: `/init`, `/resume <SEQ>`, `/status`, `/check`, `/compare`, `/monitor`, `/run`, `/agent`, `/help`, `/quit`.
+Primary entry point. Interactive CLI built with `prompt_toolkit` + `rich`. Commands: `/init`, `/resume <SEQ>`, `/load <SEQ>` (alias for resume), `/status`, `/check`, `/compare`, `/monitor`, `/run [step]`, `/rerun <step>` (force-re-run a completed step), `/agent`, `/help`, `/quit`.
 
 Each migration creates an isolated workspace: `MIGRACAO_<SEQ>/` (4-digit sequence starting at `0001`). All runtime files — `config.yaml`, `migration.db`, `logs/`, `sql/`, `json/`, `reports/` — live inside this directory.
 
@@ -68,12 +68,32 @@ All migrators share: checkpoint to SQLite, COPY protocol insertion, sub-batch re
 
 ### Monitoring
 
-`monitor.py` reads `migration.db` (Maestro) or `migration_state_*.db` (legacy) and renders a Rich TUI dashboard with progress bars, ETA, and speed.
+`monitor_oldschool_v2_updated.py` reads `migration.db` inside a `MIGRACAO_<SEQ>/` directory and renders a Rich TUI dashboard with progress bars, ETA, and speed. Call signature differs from legacy: takes the migration directory as a positional argument.
+
+```bash
+python monitor_oldschool_v2_updated.py MIGRACAO_0005              # all tables
+python monitor_oldschool_v2_updated.py MIGRACAO_0005 --big-tables
+python monitor_oldschool_v2_updated.py MIGRACAO_0005 --small-tables
+```
+
+### MCP Server
+
+`mcps/db_migration_server.py` is a FastMCP server that exposes read-only tools for both Firebird and PostgreSQL, plus migration utilities (`run_count_comparison`, `generate_migration_report`, `check_migration_logs`). It is consumed by `lib/ai/agent.py` via `StdioConnectionParams` (stdio transport, not HTTP). Do not add `print()` calls to this file — stdout is reserved for MCP's stdio protocol.
+
+### Skills (Agent Guardrails)
+
+`skills/` contains three subdirectories, each with a `SKILL.md` used as guardrail documentation for the AI agent:
+
+- `skills/duvidas-migrator/` — Maestro V2 usage guide and MCP tool catalog
+- `skills/firebird-extrator/` — Firebird extraction patterns and constraints
+- `skills/postgres-extrator/` — PostgreSQL inspection and validation patterns
 
 ## Running
 
 ```bash
-# Install dependencies (use uv or pip)
+# Install dependencies (uv preferred — uv.lock is tracked)
+uv sync
+# Or with pip:
 pip install -r requirements.txt
 
 # Activate venv (Windows)
@@ -109,7 +129,8 @@ python migrator_log_eventos_v2.py --threads 8
 python migrator_smalltables_v2.py --small-tables
 
 # Monitor progress (Rich TUI)
-python monitor.py --state-db MIGRACAO_0005/migration.db
+python monitor_oldschool_v2_updated.py MIGRACAO_0005
+python monitor_oldschool_v2_updated.py MIGRACAO_0005 --big-tables
 
 # Post-migration validation
 python compara_estrutura_fb2pg.py
@@ -136,7 +157,7 @@ Table names: Firebird uses UPPERCASE, PostgreSQL uses lowercase. Conversion is a
 
 ## AI Agent
 
-The `/agent` command in Maestro invokes `lib/ai/agent.py` (Google ADK + LiteLLM via OpenRouter). Used for schema diff resolution and error diagnosis only — never for bulk data operations. Requires `.env` at the project root:
+The `/agent` command in Maestro invokes `lib/ai/agent.py` (`MigrationAIAgent` class). Stack: Google ADK + LiteLLM (OpenRouter) + `McpToolset` connecting to `mcps/db_migration_server.py` via stdio. Uses `DatabaseSessionService` for persistent audit sessions. Used for schema diff resolution and error diagnosis only — never for bulk data operations. Requires `.env` at the project root:
 
 ```
 OPENROUTER_URL=...
@@ -170,7 +191,7 @@ MODEL=...          # LiteLLM model string, e.g. anthropic/claude-sonnet-4-5
 
 ## Dependencies
 
-Python 3.13+. Key packages: `fdb` (Firebird driver), `psycopg2-binary` (PostgreSQL), `PyYAML`, `rich` (TUI), `prompt_toolkit` (interactive CLI), `google-adk` + `litellm` (AI agent). Requires `fbclient.dll` (Windows) or `libfbclient.so` (Linux) — `fbclient.dll` is bundled in the repo root.
+Python 3.13+. Key packages: `fdb` (Firebird driver), `psycopg2-binary` (PostgreSQL), `PyYAML`, `rich` (TUI), `prompt_toolkit` (interactive CLI), `google-adk` + `litellm` (AI agent), `anthropic`, `sqlalchemy`, `python-dotenv`. Managed via `uv` (`uv.lock` tracked). Requires `fbclient.dll` (Windows) or `libfbclient.so` (Linux) — `fbclient.dll` is bundled in the repo root.
 
 ## Environment
 

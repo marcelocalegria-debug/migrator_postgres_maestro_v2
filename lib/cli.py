@@ -42,8 +42,8 @@ class MaestroCLI:
         self.runner = None
         
         self.commands = [
-            "/init", "/resume", "/status", "/check", "/compare",
-            "/monitor", "/run", "/agent", "/help", "/quit"
+            "/init", "/resume", "/load", "/status", "/check", "/compare",
+            "/monitor", "/run", "/rerun", "/agent", "/help", "/quit"
         ]
         self.completer = WordCompleter(self.commands)
         self.session = PromptSession(completer=self.completer)
@@ -84,7 +84,7 @@ class MaestroCLI:
             "você terá duas instâncias tentando migrar as mesmas tabelas. Isso causará erros de conexão, violação de PK no PostgreSQL ou, "
             "pior, [bold]duplicação de dados[/bold] caso a tabela não tenha PK definida.\n\n"
             "[bold green]=> Ação Correta:[/bold green] Se interromper o Maestro, [bold]encerre manualmente os processos de migração antigos[/bold] "
-            "antes de entrar novamente e usar /run ou /resume. Quando você voltar, o migrador saberá exatamente de onde continuar."
+            "antes de entrar novamente e usar /run ou /load. Quando você voltar, o migrador saberá exatamente de onde continuar."
         )
         self.console.print(Panel(warning_text, border_style="red", title="[blink red]ALERTA DE SEGURANÇA[/blink red]"))
 
@@ -94,7 +94,7 @@ class MaestroCLI:
             subtitle="Baseado no Plano de Implementação"
         ))
         if self.current_seq:
-            self.console.print(f"[dim]Auto-resume: Migração [bold cyan]{self.current_seq}[/bold cyan] carregada automaticamente.[/dim]\n")
+            self.console.print(f"[dim]Auto-load: Migração [bold cyan]{self.current_seq}[/bold cyan] carregada automaticamente.[/dim]\n")
         
         self.display_warning_banner()
 
@@ -125,7 +125,7 @@ class MaestroCLI:
                         self.show_help()
                     elif cmd == "/init":
                         self.do_init()
-                    elif cmd == "/resume":
+                    elif cmd == "/resume" or cmd == "/load":
                         self.do_resume(args)
                     elif cmd == "/status":
                         self.do_status()
@@ -137,6 +137,8 @@ class MaestroCLI:
                         self.do_monitor()
                     elif cmd == "/run":
                         self.do_run(args)
+                    elif cmd == "/rerun":
+                        self.do_rerun(args)
                     elif cmd == "/agent":
                         self.do_agent()
                     else:
@@ -157,15 +159,17 @@ class MaestroCLI:
         table.add_column("Comando", style="cyan")
         table.add_column("Descrição")
         table.add_row("/init", "Inicia uma nova migração (MIGRACAO_XXXX)")
-        table.add_row("/resume [seq]", "Lista ou retoma uma migração existente")
-        table.add_row("/status", "Mostra o progresso atual")
-        table.add_row("/check", "Verifica conectividade e estrutura (FB vs PG)")
-        table.add_row("/compare", "Compara estrutura entre bancos")
-        table.add_row("/run [step]", "Executa um passo específico ou todos em sequência")
-        table.add_row("/monitor", "Abre o dashboard de monitoramento")
-        table.add_row("/agent", "Entra no chat interativo com a IA do Agente ADK")
+        table.add_row("/resume [seq]", "Lista ou carrega uma migração existente")
+        table.add_row("/load [seq]", "Alias para /resume (carrega migração)")
+        table.add_row("/status", "Mostra o progresso atual dos steps")
+        table.add_row("/check", "Verifica conectividade, disco e script de ajuste FB")
+        table.add_row("/compare", "Compara estrutura entre bancos origem e destino")
+        table.add_row("/run [step]", "Executa a migração (de um passo ou todos)")
+        table.add_row("/rerun <step>", "Força a reexecução de um passo concluído")
+        table.add_row("/monitor", "Abre o dashboard interativo de monitoramento")
+        table.add_row("/agent", "Inicia chat com Agente IA para análise de dados")
         table.add_row("/help", "Mostra esta ajuda")
-        table.add_row("/quit", "Sai do Maestro")
+        table.add_row("/quit", "Encerra o Maestro com segurança")
         self.console.print(table)
 
     def do_check(self):
@@ -180,13 +184,114 @@ class MaestroCLI:
         precheck = PrecheckStep(mig_info['id'], self.db, self.config, 0)
         if precheck.run():
             self.console.print("[bold green][OK] Conectividade e pré-requisitos validados.[/bold green]")
+            
+            # [NOVO] Execução do ajusta_base_firebird.sql (Human-in-the-loop)
+            mig_dir = self.project.get_migration_dir(self.current_seq)
+            adjust_path = mig_dir / "ajusta_base_firebird.sql"
+            
+            if adjust_path.exists():
+                self.console.print(f"\n[yellow]Atenção: Script de correção '{adjust_path.name}' detectado.[/yellow]")
+                
+                try:
+                    script_content = adjust_path.read_text(encoding='utf-8')
+                    self.console.print("\n[bold cyan]--- Conteúdo do Script ---[/bold cyan]")
+                    self.console.print(script_content)
+                    self.console.print("[bold cyan]--------------------------[/bold cyan]\n")
+                except Exception as e:
+                    self.console.print(f"[red]Não foi possível ler o script: {e}[/red]")
+
+                confirm = self.session.prompt("Deseja executar as correções no banco Firebird agora? (s/N): ").lower()
+                if confirm == 's':
+                    if self._run_firebird_script(adjust_path):
+                        self.console.print("[bold green][OK] Correções aplicadas no Firebird com sucesso.[/bold green]")
+                    else:
+                        self.console.print("[bold red][FAILED] Falha ao aplicar correções no Firebird. Corrija o script e tente novamente.[/bold red]")
+                        return
+                else:
+                    self.console.print("[yellow]Execução do script de correção cancelada pelo usuário.[/yellow]")
+            
+            # COMPARE_PRE é o step 3
+            confirm_comp = self.session.prompt("\nDeseja executar a comparação de estrutura entre os bancos agora? (s/N): ").lower()
+            if confirm_comp == 's':
+                compare = ComparePreStep(mig_info['id'], self.db, self.config, 3)
+                compare.run()
+            else:
+                self.console.print("[yellow]Comparação de estrutura ignorada pelo usuário.[/yellow]")
         else:
             self.console.print("[bold red][FAILED] Falha nos pré-requisitos básicos.[/bold red]")
             return
 
-        # COMPARE_PRE é o step 3
-        compare = ComparePreStep(mig_info['id'], self.db, self.config, 3)
-        compare.run()
+    def _run_firebird_script(self, script_path: Path) -> bool:
+        """Executa um script SQL no Firebird usando o driver interno fdb."""
+        fb = self.config.firebird
+        
+        try:
+            import fdb
+            import re
+            
+            # Garante que a DLL local seja carregada no Windows
+            if os.name == 'nt':
+                fb_dll = os.path.abspath("fbclient.dll")
+                if os.path.exists(fb_dll):
+                    try:
+                        fdb.load_api(fb_dll)
+                    except: pass
+
+            self.console.print(f"Conectando ao Firebird via driver interno (fdb)...")
+            
+            # Usa o charset configurado ou fallback para UTF8
+            charset = fb.get('charset', 'UTF8').upper()
+            if charset == 'WIN1252': charset = 'WIN1252'
+            
+            conn = fdb.connect(
+                host=fb['host'], 
+                port=fb.get('port', 3050),
+                database=fb['database'],
+                user=fb['user'], 
+                password=fb['password'],
+                charset=charset
+            )
+            
+            cur = conn.cursor()
+            script_content = script_path.read_text(encoding='utf-8')
+            
+            # Limpeza básica de comentários e separação por ponto e vírgula
+            # Remove comentários de linha (--)
+            lines = [re.sub(r'--.*$', '', line) for line in script_content.splitlines()]
+            content_clean = "\n".join(lines)
+            
+            # Divide por ; para execução individual
+            statements = [s.strip() for s in content_clean.split(';') if s.strip()]
+            
+            self.console.print(f"Executando [bold]{len(statements)}[/bold] comandos SQL...")
+            
+            for i, sql in enumerate(statements, 1):
+                try:
+                    # Remove o comando 'commit' se ele vier como statement individual (o fdb faz commit no fim)
+                    if sql.lower() == 'commit':
+                        continue
+                        
+                    cur.execute(sql)
+                    
+                    # Mostra progresso simplificado
+                    display_sql = (sql[:97] + "...") if len(sql) > 100 else sql
+                    self.console.print(f"  ({i}/{len(statements)}) [dim]{display_sql}[/dim]")
+                except Exception as e_sql:
+                    self.console.print(f"\n[bold red]Erro no comando {i}:[/bold red]\n{sql}")
+                    self.console.print(f"[red]Motivo:[/red] {e_sql}")
+                    conn.rollback()
+                    cur.close()
+                    conn.close()
+                    return False
+            
+            conn.commit()
+            cur.close()
+            conn.close()
+            return True
+            
+        except Exception as e:
+            self.console.print(f"[bold red]Falha na conexão ou execução via fdb:[/bold red] {e}")
+            return False
 
     def do_compare(self):
         if not self.current_seq:
@@ -204,33 +309,59 @@ class MaestroCLI:
              return
         
         mig_dir = self.project.get_migration_dir(self.current_seq)
-        audit_db = mig_dir / "migration_audit.db"
         
         self.console.print("[bold blue]Iniciando Sessão com Agente ADK...[/bold blue]")
         self.console.print("(Digite 'sair' ou 'voltar' para retornar ao Maestro)")
         
         import asyncio
+        import threading
         from .ai.agent import MigrationAIAgent
         
-        async def run_chat():
-            agent = MigrationAIAgent(project_path=str(mig_dir.absolute()))
-            session_id = f"cli_{self.current_seq}"
-            
-            while True:
+        agent = MigrationAIAgent(project_path=str(mig_dir.absolute()))
+        session_id = f"cli_{self.current_seq}"
+
+        def run_async_task(coro):
+            """Helper para rodar coroutine em qualquer ambiente (mesmo com loop ativo)."""
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Se o loop já está rodando, precisamos de uma thread para rodar o asyncio.run
+                    result_container = {"data": None, "error": None}
+                    def _thread_target():
+                        try:
+                            # Cria um novo loop na thread
+                            result_container["data"] = asyncio.run(coro)
+                        except Exception as e:
+                            result_container["error"] = e
+                    
+                    t = threading.Thread(target=_thread_target)
+                    t.start()
+                    t.join()
+                    if result_container["error"]: raise result_container["error"]
+                    return result_container["data"]
+                else:
+                    return loop.run_until_complete(coro)
+            except RuntimeError:
+                # Nenhum loop criado ainda
+                return asyncio.run(coro)
+
+        while True:
+            try:
                 user_msg = self.session.prompt("Agente >> ").strip()
                 if not user_msg: continue
                 if user_msg.lower() in ('sair', 'voltar', 'exit', 'quit'):
                     break
                 
                 with self.console.status("[bold green]IA pensando..."):
-                    response = await agent.execute_task(session_id, user_msg)
+                    # Passar o objeto de coroutine diretamente (não chamar await aqui)
+                    response = run_async_task(agent.execute_task(session_id, user_msg))
                 
                 self.console.print(f"\n[bold blue]AGENTE:[/bold blue]\n{response}\n")
-
-        try:
-            asyncio.run(run_chat())
-        except Exception as e:
-            self.console.print(f"[red]Erro no agente: {e}[/red]")
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                self.console.print(f"[red]Erro no agente: {e}[/red]")
+                break
 
     def _check_db_exists(self, config_path: Path) -> Optional[str]:
         """Verifica se o banco de destino já existe no PostgreSQL."""
@@ -296,7 +427,7 @@ class MaestroCLI:
         # 5. Registra os steps iniciais (S04 REMOVIDO)
         step_names = [
             'PRECHECK', 'CREATE_DATABASE', 'IMPORT_SCHEMA', 'COMPARE_PRE',
-            'DISABLE_CONSTRAINTS', 'MIGRATE_BIG', 'MIGRATE_SMALL',
+            'DISABLE_CONSTRAINTS', 'MIGRATE_ALL_DATA',
             'ENABLE_CONSTRAINTS', 'SEQUENCES', 'COMPARE_POST', 'VALIDATE',
             'ANALYZE', 'REPORT'
         ]
@@ -400,6 +531,60 @@ class MaestroCLI:
                 return
         
         self.runner.run_all(start_at=start_at)
+
+    def do_rerun(self, args):
+        if not self.current_seq:
+            self.console.print("[yellow]Nenhuma migração ativa.[/yellow]")
+            return
+        
+        if not args:
+            self.console.print("[red]Uso: /rerun <step_number>[/red]")
+            return
+            
+        try:
+            step_num = int(args[0])
+        except ValueError:
+            self.console.print("[red]O argumento de /rerun deve ser o número do step.[/red]")
+            return
+
+        mig_info = self.db.get_migration_by_seq(self.current_seq)
+        step = self.db.get_step(mig_info['id'], step_num)
+        
+        if not step:
+            self.console.print(f"[red]Passo {step_num} não encontrado.[/red]")
+            return
+            
+        # [MELHORIA] Identifica tabelas para limpar progresso físico
+        self.console.print(f"[yellow]Resetando status do passo {step_num} ({step['step_name']}) para 'pending'...[/yellow]")
+        self.db.update_step(mig_info['id'], step_num, 'pending')
+        
+        # Limpeza de arquivos de estado (.db) para forçar o TRUNCATE nos scripts paralelos
+        # Isso garante que a reexecução seja considerada um "fresh start"
+        mig_dir = Path(f"MIGRACAO_{self.current_seq}")
+        work_dir = mig_dir
+        
+        patterns = []
+        if step_num == 5: # MigrateBigStep
+            patterns = ["migration_state_documento_operacao*.db", "migration_state_log_eventos*.db", "migration_state_ocorrencia_sisat*.db"]
+        elif step_num == 6: # MigrateSmallStep
+            patterns = ["migration_state_*.db"] # Limpa todos os estados de small tables
+            
+        cleaned_count = 0
+        for pattern in patterns:
+            for f in work_dir.glob(pattern):
+                try:
+                    # Não apaga o migration.db principal!
+                    if f.name == "migration.db": continue
+                    f.unlink()
+                    cleaned_count += 1
+                except Exception as e:
+                    self.console.print(f"[dim][WARN] Não foi possível remover {f.name}: {e}[/dim]")
+        
+        if cleaned_count > 0:
+            self.console.print(f"[green]Sucesso: {cleaned_count} arquivo(s) de estado limpos. A próxima execução fará um fresh start.[/green]")
+
+        # Chama o do_run a partir deste passo
+        self.do_run([str(step_num)])
 
     def do_monitor(self):
         if not self.current_seq:

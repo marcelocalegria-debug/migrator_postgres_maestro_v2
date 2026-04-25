@@ -24,12 +24,16 @@ class MigrateSmallStep(StepBase):
             '--workers', str(self.config.get('migration', {}).get('parallel_workers', 4))
         ]
         
+        import os
+        env = os.environ.copy()
+        env['PYTHONIOENCODING'] = 'utf-8'
+
         try:
             print(f"Iniciando carga paralela de tabelas pequenas...")
             log_path = mig_dir / "logs" / "migrate_small.stdout.log"
-            with open(log_path, "w") as log_f:
+            with open(log_path, "w", encoding='utf-8') as log_f:
                 process = subprocess.run(
-                    cmd, stdout=log_f, stderr=subprocess.STDOUT, text=True, check=False
+                    cmd, stdout=log_f, stderr=subprocess.STDOUT, text=True, check=False, env=env
                 )
             
             if process.returncode == 0:

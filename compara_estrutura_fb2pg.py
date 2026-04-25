@@ -80,7 +80,11 @@ try:
     from rich.panel import Panel
     from rich.markup import escape as rich_escape
     HAS_RICH = True
-    console = Console()
+    # Se não for um TTY (ex: rodando via Maestro), força uma largura maior para evitar quebras de linha precoces
+    if not sys.stdout.isatty():
+        console = Console(width=160, force_terminal=True)
+    else:
+        console = Console()
 except ImportError:
     HAS_RICH = False
     console = None
@@ -809,7 +813,7 @@ def _print_summary_rich(results: List[dict], only_fb: List[str], only_pg: List[s
             border_style='red'
         ))
         
-        for r in issues[:50]:  # Limitar a 50 para não poluir
+        for r in issues:
             status = []
             if not r['count_ok']:  status.append('[red]COUNT[/]')
             if not r['pk_ok']:     status.append('[yellow]PK[/]')
@@ -820,29 +824,61 @@ def _print_summary_rich(results: List[dict], only_fb: List[str], only_pg: List[s
             
             console.print(f'\n[bold]{rich_escape(r["table"])}[/] - {" ".join(status)}')
             for issue in r['issues']:
-                console.print(f'  [dim]• {rich_escape(issue)}[/]')
-        
-        if len(issues) > 50:
-            console.print(f'\n[dim]... e mais {len(issues)-50} tabelas com diferenças[/]')
+                console.print(f'  [dim]• {rich_escape(issue)}[/]', soft_wrap=True)
     
     console.print()
 
 
 # ─── Main ──────────────────────────────────────────────────────────────────────
 
+class Tee:
+    def __init__(self, *files):
+        self.files = files
+    def write(self, data):
+        for f in self.files:
+            f.write(data)
+            f.flush()
+    def flush(self):
+        for f in self.files:
+            f.flush()
+    def isatty(self):
+        return any(f.isatty() for f in self.files if hasattr(f, 'isatty'))
+
 def main():
     parser = argparse.ArgumentParser(
         description='Compara estrutura completa (count + PKs + FKs + índices + constraints) Firebird vs PostgreSQL'
     )
-    parser.add_argument('--config', default='config.yaml', help='Caminho do config.yaml')
+    parser.add_argument('--work-dir', required=True, help='Diretório de trabalho da migração')
+    parser.add_argument('--config', default=None, help='Caminho do config.yaml (default: work-dir/config.yaml)')
     parser.add_argument('--schema', default=None, help='Schema PostgreSQL (default: lido do config)')
     parser.add_argument('--verbose', action='store_true', help='Mostrar progresso detalhado')
     parser.add_argument('--skip-count', action='store_true', help='Pular a comparação de contagem de registros')
     args = parser.parse_args()
 
-    config_path = Path(args.config)
+    work_dir = Path(args.work_dir)
+    if not work_dir.exists():
+        sys.exit(f'Erro: diretório de trabalho não encontrado: {work_dir}')
+
+    config_path = Path(args.config) if args.config else work_dir / 'config.yaml'
     if not config_path.exists():
         sys.exit(f'Erro: config não encontrado: {config_path}')
+
+    # Configura log
+    log_dir = work_dir / 'logs'
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / 'compare_structure.log'
+    
+    f_log = open(log_file, 'a', encoding='utf-8')
+    sys.stdout = Tee(sys.stdout, f_log)
+    sys.stderr = Tee(sys.stderr, f_log)
+
+    # Re-inicializa console Rich para usar o novo stdout
+    if HAS_RICH:
+        global console
+        if not sys.stdout.isatty():
+            console = Console(file=sys.stdout, width=160, force_terminal=True)
+        else:
+            console = Console(file=sys.stdout)
 
     with open(config_path, encoding='utf-8') as f:
         cfg = yaml.safe_load(f)

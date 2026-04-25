@@ -31,6 +31,9 @@ select * from versao_inst order by nu_versao;
 $env:PGCLIENTENCODING='LATIN1'
 $env:PGPASSWORD='5tEkZZwRydTUXarJ'
 psql -h localhost -p 5435 -U postgres
+\c c6_producao
+
+
 
 postgres=# \c c6_producao
 Agora você está conectado ao banco de dados "c6_producao" como usuário "postgres".

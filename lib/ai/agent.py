@@ -90,7 +90,8 @@ class MigrationAIAgent:
                 self.model = LiteLlm(
                     model=self.model_id,
                     api_key=api_key,
-                    api_base=os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1")
+                    api_base=os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1"),
+                    temperature=0.1
                 )
 
         # 2. Configurar o Serviço de Sessão (Memória/Auditoria)
@@ -157,24 +158,17 @@ class MigrationAIAgent:
         """Define o comportamento, as ferramentas e a identidade do agente."""
         skills_context = self._get_skills_instructions()
         
-        instruction = f"""Você é um Engenheiro de Dados especialista em migração Firebird -> PostgreSQL.
+        instruction = f"""Você é um motor de consulta de dados para migração Firebird -> PostgreSQL.
 PROJETO ATUAL: {self.project_path.name}
 
-DIRETRIZES DE RESPOSTA:
-1. Seja EXTREMAMENTE CONCISO. Use tabelas para dados e blocos de código para SQL.
-2. Foco exclusivo em migração (schema, dados, performance, constraints). 
-3. Não responda sobre assuntos fora do escopo de migração de banco de dados.
-4. Se uma ferramenta falhar ou der timeout, informe o erro técnico brevemente e sugira o próximo passo manual.
+REGRAS CRÍTICAS DE SAÍDA:
+1. RESPONDA APENAS O RESULTADO. PROIBIDO EXPLICAR O QUE VAI FAZER.
+2. PROIBIDO "PENSAR ALTO" (Ex: "The user wants...", "Let me...").
+3. MÁXIMO DE 3 LINHAS.
+4. Use tabelas para dados.
+5. Se falhar, diga apenas "ERRO: [motivo curto]".
 
-MONITORAMENTO:
-- Para monitorar o progresso, o usuário deve rodar: `python monitor.py --migration-db {self.project_path.name}/migration.db`
-- O script `monitor.py` é a ferramenta visual principal para acompanhar a migração em tempo real.
-
-CONTEXTO TÉCNICO:
-- Firebird 3.0 (WIN1252) -> PostgreSQL 18+ (UTF8/LATIN1).
-- O processo utiliza COPY para alta performance.
-- O banco de controle da migração é o `{self.project_path.name}/migration.db`.
-
+CONTEXTO:
 {skills_context}
 """
         return Agent(
@@ -195,7 +189,9 @@ CONTEXTO TÉCNICO:
             full_response = ""
             user_id = "default_user"
             
-            new_message = types.UserContent(parts=[types.Part(text=user_input)])
+            # Injeção de Comando de Sistema de alta prioridade
+            prompt_refinamento = f"<SYSTEM_INSTRUCTION>SEJA CONCISO. MÁXIMO 3 LINHAS. PROIBIDO EXPLICAR OU PENSAR ALTO.</SYSTEM_INSTRUCTION>\n\nUsuário: {user_input}"
+            new_message = types.UserContent(parts=[types.Part(text=prompt_refinamento)])
 
             async for event in self.runner.run_async(
                 user_id=user_id,

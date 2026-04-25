@@ -344,9 +344,26 @@ class ConstraintManager:
 
         total = len(self.dropped_objects)
         if total == 0:
-            logger.warning(
-                f"ATENÇÃO: Nenhum objeto encontrado em '{self.schema}'.'{self.table}'. "
-                f"Verifique se a tabela PG existe e tem PK/FK/índices definidos.")
+            # Verifica se a tabela realmente existe antes de emitir alerta
+            conn = self._connect()
+            try:
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 
+                        FROM information_schema.tables 
+                        WHERE table_schema = %s AND table_name = %s
+                    )
+                """, (self.schema, self.table))
+                exists = cur.fetchone()[0]
+                if exists:
+                    logger.info(f"Tabela '{self.schema}'.'{self.table}' existe mas não possui PK/FK/índices para desabilitar (Normal).")
+                else:
+                    logger.warning(
+                        f"ATENÇÃO: Tabela '{self.schema}'.'{self.table}' NÃO FOI ENCONTRADA no PostgreSQL! "
+                        f"Verifique se a etapa de importação de esquema (Step 2) foi executada com sucesso.")
+            finally:
+                conn.close()
         else:
             logger.info(f"Total coletado: {total} objetos.")
         return total

@@ -55,9 +55,11 @@ class ComparePreStep(StepBase):
         # Executa compara_estrutura_fb2pg.py com streaming de output
         cmd = [
             sys.executable, 'compara_estrutura_fb2pg.py',
-            '--config', str(config_path.absolute()),
+            '--work-dir', str(mig_dir.absolute()),
             '--skip-count'
         ]
+        
+        print(f"[DEBUG] Executando comando: {' '.join(cmd)}")
         
         full_output = []
         try:
@@ -79,6 +81,8 @@ class ComparePreStep(StepBase):
             log_path = mig_dir / "logs" / "compare_pre.log"
             with open(log_path, 'w', encoding='utf-8') as f:
                 f.write(output)
+            
+            print(f"\n[OK] Comparação finalizada. Log completo em: [bold cyan]{log_path.absolute()}[/bold cyan]")
 
             if process.returncode != 0:
                 # Se o banco não existe, não faz sentido chamar a IA para analisar diferenças
@@ -93,18 +97,30 @@ class ComparePreStep(StepBase):
 
                 print("[WARNING] Diferenças encontradas na estrutura.")
                 
+                # [NOVO] Prompt de confirmação para análise da IA
+                confirm_ai = input("\nDeseja que o Agente ADK analise as diferenças e gere um script SQL de correção? (s/N): ").lower()
+                if confirm_ai != 's':
+                    print("[INFO] Análise da IA cancelada pelo usuário. Prossiga com os ajustes manuais se necessário.")
+                    return True
+
                 # Integração com o Agente ADK
                 try:
                     print("Solicitando análise do Agente ADK para as diferenças encontradas...")
                     
-                    # Prepara o prompt para o agente
-                    diff_context = output
-                    if "DETALHAMENTO DE DIFERENCAS" in output:
-                         diff_context = output.split("DETALHAMENTO DE DIFERENCAS")[1]
+                    # [MELHORIA] Lê o arquivo de log COMPLETO para enviar para a IA
+                    full_log_content = log_path.read_text(encoding='utf-8')
+                    
+                    diff_context = full_log_content
+                    if "DETALHAMENTO DE DIFERENCAS" in full_log_content:
+                         diff_context = full_log_content.split("DETALHAMENTO DE DIFERENCAS")[1]
                     
                     user_input = f"""Foram encontradas diferenças na estrutura entre Firebird e Postgres durante a fase PRÉ-MIGRAÇÃO.
 Analise as diferenças abaixo e gere um script SQL corretivo (ALTER TABLE) para aplicar no Postgres.
-IMPORTANTE: Se as tabelas não existirem, ignore-as, pois o foco são apenas as diferenças em tabelas já existentes.
+
+REQUISITOS DO SCRIPT:
+1. Gere o script passo a passo.
+2. Para cada ajuste, inclua uma explicação detalhada em formato de comentário SQL (-- ou /* ... */).
+3. O foco são apenas as diferenças em tabelas que já existem no destino.
 
 DIFERENÇAS:
 {diff_context}
@@ -129,18 +145,16 @@ DIFERENÇAS:
 
                         # Loop Interativo (Human-in-the-Loop)
                         while True:
-                            print("\nOPÇÕES: [aplicar] para executar o SQL, [continuar] para seguir a migração, ou digite sua dúvida para a IA.")
+                            print("\nOPÇÕES: [check] para checar novamente (padrão), [pular verificacao] para seguir (não recomendado), ou digite sua dúvida para a IA.")
                             user_cmd = input("(Agente ADK) >> ").strip()
                             
-                            if not user_cmd:
-                                continue
+                            if not user_cmd or user_cmd.lower() == 'check':
+                                print("[INFO] Reiniciando comparação de estrutura...")
+                                return "check"
 
-                            if user_cmd.lower() in ['continuar', 'sair', 'pular']:
-                                break
-                            
-                            if user_cmd.lower() == 'aplicar':
-                                self._apply_sql_fixes(sql_fix_path)
-                                break
+                            if user_cmd.lower() in ['pular verificacao', 'pular', 'continuar']:
+                                print("[WARNING] Continuando migração com possíveis discrepâncias de estrutura. Use por sua conta e risco.")
+                                return "continue"
                             
                             # Conversa com a IA
                             response = await agent.execute_task(session_id, user_cmd)
@@ -152,8 +166,11 @@ DIFERENÇAS:
                                 with open(sql_fix_path, 'w', encoding='utf-8') as f:
                                     f.write(sql_content)
                                 print(f"Script SQL atualizado em: {sql_fix_path}")
-                    
-                    asyncio.run(chat_with_agent())
+                                print(f"[DICA] Aplique o script acima manualmente no seu cliente SQL (pgAdmin, psql, etc) e depois digite 'check' aqui.")
+
+                    action = asyncio.run(chat_with_agent())
+                    if action == "check":
+                        return self.run()
                     
                 except Exception as ai_err:
                     print(f"[ERROR] Falha ao interagir com o Agente ADK: {ai_err}")

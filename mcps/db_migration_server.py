@@ -52,9 +52,10 @@ def load_config():
 def get_safe_fb_connection():
     """Conexão Firebird RESTRITA (Audit/ReadOnly)."""
     config = load_config()['firebird']
-    # OBRIGATÓRIO usar usuário de auditoria
+    # OBRIGATÓRIO usar usuário de auditoria e ROLE
     user = config.get('audit_user', 'MIGRATION_AUDIT')
     password = config.get('audit_password', 'migra_audit_123')
+    role = config.get('audit_role', 'MIGRATION_AUDIT_ROLE')
     
     return fdb.connect(
         host=config['host'],
@@ -62,6 +63,7 @@ def get_safe_fb_connection():
         database=config['database'],
         user=user,
         password=password,
+        role=role,
         charset='WIN1252'
     )
 
@@ -139,60 +141,8 @@ def check_migration_logs(lines: int = 50, filter_error: bool = True) -> str:
     return "\n".join(output)
 
 @mcp.tool()
-def get_firebird_table_count(table_name: str) -> str:
-    """Conta registros no Firebird usando conexão segura (ReadOnly)."""
-    return get_firebird_table_count_safe(table_name)
-
-@mcp.tool()
-def get_firebird_table_count_safe(table_name: str) -> str:
-    """Conta registros no Firebird usando conexão segura (ReadOnly)."""
-    try:
-        conn = get_safe_fb_connection()
-        cur = conn.cursor()
-        cur.execute(f'SELECT count(*) FROM "{table_name.upper()}"')
-        count = cur.fetchone()[0]
-        conn.close()
-        return f"Tabela {table_name.upper()}: {count} registros."
-    except Exception as e:
-        return f"Erro ao contar registros no Firebird (ReadOnly): {e}"
-
-@mcp.tool()
-def run_count_comparison() -> str:
-    """Executa o script de comparação de contagem entre Firebird e Postgres."""
-    try:
-        result = subprocess.run([sys.executable, "compara_cont_fb2pg.py"], capture_output=True, text=True)
-        return f"Saída do Comparador:\n{result.stdout}\n{result.stderr}"
-    except Exception as e:
-        return f"Erro ao executar comparador: {e}"
-
-@mcp.tool()
-def generate_migration_report() -> str:
-    """Gera o relatório HTML de comparação de estrutura."""
-    try:
-        result = subprocess.run([sys.executable, "gera_relatorio_compara_estrutura_fb2pg_html.py"], capture_output=True, text=True)
-        return f"Relatório gerado com sucesso.\nSaída: {result.stdout}"
-    except Exception as e:
-        return f"Erro ao gerar relatório: {e}"
-
-@mcp.tool()
-def open_html_report() -> str:
-    """Tenta abrir o último relatório HTML gerado no navegador."""
-    html_files = sorted(glob.glob("*.html"), key=os.path.getmtime, reverse=True)
-    if not html_files:
-        return "Nenhum arquivo HTML encontrado."
-    
-    latest_html = html_files[0]
-    try:
-        if os.name == 'nt':
-            os.startfile(latest_html)
-            return f"Relatório {latest_html} aberto no navegador."
-        return f"Arquivo encontrado: {latest_html}. (Comando 'open' não disponível neste OS)"
-    except Exception as e:
-        return f"Erro ao abrir arquivo: {e}"
-
-@mcp.tool()
-def execute_readonly_sql_postgres(sql: str) -> str:
-    """Executa SQL SELECT no Postgres usando conexão segura."""
+def execute_postgres_sql(sql: str) -> str:
+    """Executa SQL SELECT no Postgres usando conexão segura (ReadOnly)."""
     if "SELECT" not in sql.upper():
         return "Erro: Apenas comandos SELECT são permitidos por segurança."
     try:
@@ -204,6 +154,21 @@ def execute_readonly_sql_postgres(sql: str) -> str:
         return str(rows)
     except Exception as e:
         return f"Erro ao executar SQL no Postgres (ReadOnly): {e}"
+
+@mcp.tool()
+def execute_firebird_sql(sql: str) -> str:
+    """Executa SQL SELECT no Firebird usando conexão segura (ReadOnly)."""
+    if "SELECT" not in sql.upper():
+        return "Erro: Apenas comandos SELECT são permitidos por segurança."
+    try:
+        conn = get_safe_fb_connection()
+        cur = conn.cursor()
+        cur.execute(sql)
+        rows = cur.fetchmany(100)
+        conn.close()
+        return str(rows)
+    except Exception as e:
+        return f"Erro ao executar SQL no Firebird (ReadOnly): {e}"
 
 if __name__ == "__main__":
     mcp.run()

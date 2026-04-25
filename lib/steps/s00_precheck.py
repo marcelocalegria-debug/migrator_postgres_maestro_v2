@@ -71,8 +71,10 @@ class PrecheckStep(StepBase):
         else:
             print(f"[OK] Espaço em disco: {free_gb}GB livres.")
 
-        # 5. Verifica schema.sql no diretório da migração
+        # 5. Verifica arquivos obrigatórios no diretório da migração
         mig_dir = Path(f"MIGRACAO_{self.db.get_migration(self.migration_id)['seq']}")
+        
+        # 5.1 Verifica schema.sql
         schema_path = mig_dir / "schema.sql"
         if not schema_path.exists():
             print(f"[ERROR] Arquivo schema.sql não encontrado em {mig_dir}")
@@ -80,33 +82,94 @@ class PrecheckStep(StepBase):
         else:
             print(f"[OK] Arquivo schema.sql encontrado.")
 
+        # 5.2 Verifica ajusta_base_firebird.sql
+        adjust_path = mig_dir / "ajusta_base_firebird.sql"
+        if not adjust_path.exists():
+            print(f"[ERROR] Arquivo ajusta_base_firebird.sql não encontrado em {mig_dir}")
+            print(f"[INFO] Este script é obrigatório para corrigir dados no Firebird antes da migração.")
+            success = False
+        else:
+            print(f"[OK] Arquivo ajusta_base_firebird.sql encontrado.")
+
         return success
 
     def _create_firebird_audit_user(self, conn):
-        """Cria o usuário MIGRATION_AUDIT no Firebird para leitura segura."""
+        """Cria o usuário MIGRATION_AUDIT e a ROLE de auditoria no Firebird."""
         user = "MIGRATION_AUDIT"
         password = "migra_audit_123"
-        print(f"Verificando usuário de auditoria Firebird '{user}'...")
+        role = "MIGRATION_AUDIT_ROLE"
+        
+        print(f"Configurando auditoria Firebird (User: {user}, Role: {role})...")
         try:
             cur = conn.cursor()
-            # No Firebird 3+, usuários são globais. Tenta criar, ignora se já existir.
+            
+            # 1. Cria Usuário
             try:
                 cur.execute(f"CREATE USER {user} PASSWORD '{password}'")
                 conn.commit()
-                print(f"[OK] Usuário {user} criado no Firebird.")
+                print(f"[OK] Usuário {user} criado.")
+            except Exception as e:
+                if "already exists" in str(e).lower() or "primary or unique key" in str(e).lower():
+                    print(f"[INFO] Usuário {user} já existe.")
+                else: print(f"[WARNING] Erro ao criar usuário: {e}")
+
+            # 2. Cria Role
+            try:
+                cur.execute(f"CREATE ROLE {role}")
+                conn.commit()
+                print(f"[OK] Role {role} criada.")
             except Exception as e:
                 err_msg = str(e).lower()
-                if "already exists" in err_msg or "violation of primary or unique key constraint" in err_msg:
-                    print(f"[INFO] Usuário {user} já existe no Firebird.")
-                else:
-                    print(f"[WARNING] Não foi possível criar usuário FB: {e}")
+                if "already exists" in err_msg or "primary or unique key" in err_msg or "integ_5" in err_msg:
+                    print(f"[INFO] Role {role} já existe.")
+                else: 
+                    print(f"[WARNING] Erro ao criar role: {e}")
 
-            # Grant SELECT em tabelas de sistema pelo menos
-            # Em Firebird 3.0, não há GRANT SELECT ON ALL TABLES. 
-            # O migrador fará grants sob demanda se necessário, ou o DBA pode fazer.
+            # 3. Associa Role ao Usuário
+            try:
+                cur.execute(f"GRANT {role} TO {user}")
+                conn.commit()
+            except Exception as e:
+                err_msg = str(e).lower()
+                if "already exists" not in err_msg and "integ" not in err_msg:
+                    print(f"[WARNING] Erro ao associar role: {e}")
+
+            # 4. Grant iterativo robusto (Alternativa ao EXECUTE BLOCK que falha no FB3)
+            # Lê as tabelas primeiro
+            cur.execute("SELECT TRIM(RDB$RELATION_NAME) FROM RDB$RELATIONS WHERE COALESCE(RDB$SYSTEM_FLAG, 0) = 0 AND RDB$RELATION_TYPE IN (0, 1)")
+            tables = [row[0] for row in cur.fetchall()]
+            
+            # Lê tabelas de sistema
+            cur.execute("SELECT TRIM(RDB$RELATION_NAME) FROM RDB$RELATIONS WHERE RDB$SYSTEM_FLAG = 1 AND RDB$RELATION_NAME STARTING WITH 'RDB$'")
+            sys_tables = [row[0] for row in cur.fetchall()]
+            
+            all_objects = tables + sys_tables
+            print(f"Aplicando privilégios em {len(all_objects)} objetos para a ROLE {role}...")
+            
+            error_count = 0
+            for obj in all_objects:
+                try:
+                    cur.execute(f'GRANT SELECT ON "{obj}" TO ROLE {role}')
+                    conn.commit()
+                except Exception as e:
+                    conn.rollback()
+                    if "already exists" not in str(e).lower() and "integ_5" not in str(e).lower():
+                        error_count += 1
+                    # Fallback for the specific user
+                    try:
+                        cur.execute(f'GRANT SELECT ON "{obj}" TO USER {user}')
+                        conn.commit()
+                    except Exception as fb_err:
+                        conn.rollback()
+
+            if error_count == 0:
+                print(f"[OK] Privilégios de leitura iterativos concedidos.")
+            else:
+                print(f"[WARNING] Privilégios concedidos com {error_count} erros (ignorados).")
+
             cur.close()
         except Exception as e:
-            print(f"[WARNING] Erro ao configurar auditoria FB: {e}")
+            print(f"[WARNING] Erro geral na auditoria FB: {e}")
 
     def _create_postgres_audit_user(self, conn):
         """Cria o usuário migration_audit no PostgreSQL para leitura segura."""

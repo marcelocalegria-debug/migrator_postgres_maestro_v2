@@ -10,16 +10,14 @@ class ReportStep(StepBase):
         print("--- Gerando Relatório Final ---")
         mig_info = self.db.get_migration(self.migration_id)
         mig_dir = Path(f"MIGRACAO_{mig_info['seq']}")
-        config_path = mig_dir / "config.yaml"
-        output_html = mig_dir / "reports" / "relatorio_migracao.html"
         
-        # O script original gera um relatório de estrutura
-        # Vamos adaptá-lo ou usá-lo como base
+        # O script agora aceita --work-dir e resolve os caminhos internos
         cmd = [
             sys.executable, 'gera_relatorio_compara_estrutura_fb2pg_html.py',
-            '--config', str(config_path.absolute()),
-            '--output', str(output_html.absolute())
+            '--work-dir', str(mig_dir.absolute())
         ]
+        
+        output_html = mig_dir / "reports" / "relatorio_estrutura.html"
         
         try:
             print("Executando gera_relatorio_compara_estrutura_fb2pg_html.py...")

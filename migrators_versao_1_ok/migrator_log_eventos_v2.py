@@ -2,7 +2,7 @@
 """
 migrator_log_eventos.py
 ========================
-Migra LOG_EVENTOS (Firebird 3 -> PostgreSQL) em N threads paralelas.
+Migra LOG_EVENTOS (Firebird 3 → PostgreSQL) em N threads paralelas.
 
 LOG_EVENTOS não tem PK nem FK — o particionamento usa RDB$DB_KEY,
 o ponteiro físico de linha do Firebird (8 bytes, único, ordenável).
@@ -19,10 +19,10 @@ Uso:
     python migrator_log_eventos.py --generate-scripts-only
 
 Arquivos gerados:
-    migration_state_log_eventos.db          -> monitor.py (progresso agregado)
-    migration_state_log_eventos_tN.db       -> checkpoint individual por thread
-    migration_log_eventos_tN.log            -> log individual por thread
-    migration_log_eventos_parallel.log      -> log do orquestrador
+    migration_state_log_eventos.db          → monitor.py (progresso agregado)
+    migration_state_log_eventos_tN.db       → checkpoint individual por thread
+    migration_log_eventos_tN.log            → log individual por thread
+    migration_log_eventos_parallel.log      → log do orquestrador
     disable_constraints_log_eventos.sql
     enable_constraints_log_eventos.sql
     constraint_state_log_eventos.json
@@ -60,19 +60,16 @@ if os.name == 'nt' and hasattr(os, 'add_dll_directory'):
 
 import fdb
 
-if os.name == "nt":
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    _fb_paths = [
-        os.path.join(script_dir, "fbclient.dll"),
-        os.path.abspath("fbclient.dll"),
-        r"C:\Program Files\Firebird\Firebird_3_0\fbclient.dll",
-        r"C:\Program Files\Firebird\Firebird_4_0\fbclient.dll",
-        r"C:\Program Files\Firebird\Firebird_5_0\fbclient.dll",
-        r"C:\Program Files\Firebird\Firebird_2_5\bin\fbclient.dll",
-        r"C:\Program Files (x86)\Firebird\Firebird_3_0\fbclient.dll",
-        r"C:\Program Files (x86)\Firebird\Firebird_2_5\bin\fbclient.dll",
-    ]
-    for _p in _fb_paths:
+if os.name == 'nt':
+    for _p in [
+        os.path.abspath(os.path.join(os.path.dirname(__file__) or '.', 'fbclient.dll')),
+        r'C:\Program Files\Firebird\Firebird_3_0\fbclient.dll',
+        r'C:\Program Files\Firebird\Firebird_4_0\fbclient.dll',
+        r'C:\Program Files\Firebird\Firebird_5_0\fbclient.dll',
+        r'C:\Program Files\Firebird\Firebird_2_5\bin\fbclient.dll',
+        r'C:\Program Files (x86)\Firebird\Firebird_3_0\fbclient.dll',
+        r'C:\Program Files (x86)\Firebird\Firebird_2_5\bin\fbclient.dll',
+    ]:
         if os.path.exists(_p):
             try:
                 fdb.load_api(_p)
@@ -80,12 +77,7 @@ if os.name == "nt":
             except Exception:
                 pass
 
-                break
-            except Exception:
-                pass
-
 from pg_constraints import ConstraintManager
-from lib.state import StateManager, MigrationProgress
 
 BASE_DIR     = Path(__file__).parent
 WORK_DIR     = BASE_DIR / 'work'
@@ -97,8 +89,47 @@ DEST_TABLE   = 'log_eventos'
 
 
 # ═══════════════════════════════════════════════════════════════
-#  ESTRUTURAS DE DADOS
+#  ESTRUTURAS DE DADOS  (idênticas ao migrator_parallel_doc_oper)
 # ═══════════════════════════════════════════════════════════════
+
+@dataclass
+class MigrationProgress:
+    source_table: str = ''
+    dest_table: str = ''
+    total_rows: int = 0
+    rows_migrated: int = 0
+    rows_failed: int = 0
+    current_batch: int = 0
+    total_batches: int = 0
+    batch_size: int = 5000
+    last_pk_value: Any = None
+    pk_columns: List[str] = field(default_factory=list)
+    use_db_key: bool = True          # LOG_EVENTOS nunca tem PK
+    last_db_key: bytes = None        # checkpoint RDB$DB_KEY
+    status: str = 'idle'
+    started_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    elapsed_seconds: float = 0.0
+    speed_rows_per_sec: float = 0.0
+    eta_seconds: Optional[float] = None
+    error_message: Optional[str] = None
+    constraints_disabled: bool = False
+    phase: str = 'idle'
+
+    def to_dict(self):
+        d = asdict(self)
+        if isinstance(d.get('last_db_key'), (bytes, memoryview)):
+            d['last_db_key'] = d['last_db_key'].hex() if d['last_db_key'] else None
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> 'MigrationProgress':
+        valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        if isinstance(valid.get('last_db_key'), str):
+            valid['last_db_key'] = bytes.fromhex(valid['last_db_key'])
+        return cls(**valid)
+
 
 @dataclass
 class ColumnMeta:
@@ -113,7 +144,82 @@ class ColumnMeta:
 
 
 # ═══════════════════════════════════════════════════════════════
-#  MAPEAMENTO DE TIPOS
+#  STATE MANAGER  (idêntico ao migrator_parallel_doc_oper)
+# ═══════════════════════════════════════════════════════════════
+
+class StateManager:
+    def __init__(self, db_path):
+        self.db_path = str(db_path)
+        self._init_db()
+
+    def _conn(self):
+        return sqlite3.connect(self.db_path, timeout=10)
+
+    def _init_db(self):
+        conn = self._conn()
+        conn.executescript("""
+            PRAGMA journal_mode=WAL;
+            CREATE TABLE IF NOT EXISTS migration_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                progress_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS migration_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                batch_number INTEGER,
+                rows_in_batch INTEGER,
+                total_rows INTEGER,
+                speed_rps REAL,
+                eta_seconds REAL,
+                message TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_log_ts ON migration_log(timestamp);
+        """)
+        conn.commit()
+        conn.close()
+
+    def save_progress(self, p: MigrationProgress):
+        conn = self._conn()
+        data = json.dumps(p.to_dict(), default=str)
+        now  = datetime.now().isoformat()
+        conn.execute("""
+            INSERT INTO migration_state (id, progress_json, updated_at)
+            VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                progress_json = excluded.progress_json,
+                updated_at    = excluded.updated_at
+        """, (data, now))
+        conn.commit()
+        conn.close()
+
+    def load_progress(self) -> Optional[MigrationProgress]:
+        conn = self._conn()
+        row  = conn.execute(
+            'SELECT progress_json FROM migration_state WHERE id=1').fetchone()
+        conn.close()
+        return MigrationProgress.from_dict(json.loads(row[0])) if row else None
+
+    def log_batch(self, batch, rows, total, speed, eta, msg=''):
+        conn = self._conn()
+        conn.execute("""
+            INSERT INTO migration_log
+                (timestamp, batch_number, rows_in_batch, total_rows,
+                 speed_rps, eta_seconds, message)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (datetime.now().isoformat(), batch, rows, total, speed, eta, msg))
+        conn.commit()
+        conn.close()
+
+    def reset(self):
+        conn = self._conn()
+        conn.executescript('DELETE FROM migration_state; DELETE FROM migration_log;')
+        conn.commit()
+        conn.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+#  MAPEAMENTO DE TIPOS  (idêntico)
 # ═══════════════════════════════════════════════════════════════
 
 _FB = {7:'SMALLINT', 8:'INTEGER', 10:'REAL', 12:'DATE', 13:'TIME',
@@ -167,12 +273,7 @@ def _convert_blob(val, blob_subtype: int, charset: str):
     if val is None:
         return None
     if hasattr(val, 'read'):
-        blob_obj = val
-        try:
-            val = blob_obj.read()
-        finally:
-            if hasattr(blob_obj, 'close'):
-                blob_obj.close()
+        val = val.read()
     elif isinstance(val, memoryview):
         val = bytes(val)
     if blob_subtype == 1:
@@ -418,6 +519,7 @@ class AggregatorThread(threading.Thread):
             total_failed   += p.rows_failed
             total_speed    += (p.speed_rows_per_sec or 0)
             max_eta         = max(max_eta, p.eta_seconds or 0)
+            max_elapsed     = max(max_elapsed, p.elapsed_seconds or 0)
             statuses.append(p.status)
 
         agg_status = ('completed' if statuses and all(s in ('loaded', 'completed')
@@ -429,11 +531,10 @@ class AggregatorThread(threading.Thread):
         agg = MigrationProgress(
             source_table=SOURCE_TABLE, dest_table=DEST_TABLE,
             total_rows=self.total_rows, rows_migrated=total_migrated,
-            rows_failed=total_failed, status=agg_status,
+            rows_failed=total_failed, status=agg_status, phase='migrating',
             speed_rows_per_sec=total_speed, eta_seconds=max_eta,
-            updated_at=datetime.now().isoformat(),
-            use_db_key=True,
-            category='parallel_dbkey')
+            elapsed_seconds=max_elapsed, updated_at=datetime.now().isoformat(),
+            use_db_key=True, constraints_disabled=True)
         self.master.save_progress(agg)
 
     def run(self):
@@ -479,7 +580,7 @@ class WorkerThread(threading.Thread):
 
         self.state_db_path = WORK_DIR / f'migration_state_{DEST_TABLE}_t{thread_id}.db'
         self.log_file      = LOG_DIR  / f'migration_{DEST_TABLE}_t{thread_id}.log'
-        self.state         = StateManager(self.state_db_path) # Workers always use local DB
+        self.state         = StateManager(self.state_db_path)
         self.progress      = MigrationProgress()
         self.exception: Optional[Exception] = None
 
@@ -683,7 +784,7 @@ class WorkerThread(threading.Thread):
 
         pct    = (migrated / total * 100) if total > 0 else 0
         filled = int(30 * pct / 100)
-        bar    = '#' * filled + '-' * (30 - filled)
+        bar    = '█' * filled + '░' * (30 - filled)
         self.log.info(
             f'  [{bar}] {pct:5.1f}% | {migrated:>12,}/{total:>12,} | '
             f'Lote {batch_num:>5,} | {speed:>10,.0f} lin/s | '
@@ -715,16 +816,16 @@ class WorkerThread(threading.Thread):
         if is_restart:
             self.progress = saved
             self.progress.status = 'running'
+            self.progress.phase  = 'migrating'
             self.log.info(f'[T{self.tid}] RESTART — {saved.rows_migrated:,} linhas migradas')
         else:
             self.progress = MigrationProgress(
                 source_table=SOURCE_TABLE, dest_table=f'{DEST_TABLE}_t{self.tid}',
                 total_rows=total, batch_size=batch_size,
                 total_batches=total_batches, use_db_key=True,
-                status='running',
+                status='running', phase='migrating',
                 started_at=datetime.now().isoformat(),
-                worker_id=f't{self.tid}',
-                category='parallel_dbkey')
+                constraints_disabled=True)
         self.state.save_progress(self.progress)
 
         fb_conn = self._fb_conn()
@@ -768,7 +869,6 @@ class WorkerThread(threading.Thread):
             rows_processed = (self.progress.rows_migrated
                               if is_restart else 0)
 
-            completed = False
             while not self.shutdown.is_set():
                 row = fb_cur.fetchone()
                 if row is None:
@@ -781,7 +881,6 @@ class WorkerThread(threading.Thread):
                         self._update_progress(batch_buf, batch_num, t0, last_dbkey)
                         self.state.save_progress(self.progress)
                         batch_buf = []
-                    completed = True
                     break
 
                 batch_buf.append(row)
@@ -801,15 +900,18 @@ class WorkerThread(threading.Thread):
                         self.state.save_progress(self.progress)
                         last_save = time.time()
 
-            if self.shutdown.is_set() and not completed:
+            if self.shutdown.is_set():
                 self.progress.status = 'paused'
+                self.progress.phase  = 'paused'
                 self.progress.updated_at = datetime.now().isoformat()
                 self.state.save_progress(self.progress)
                 self.log.warning(f'[T{self.tid}] PAUSADO. Execute novamente para continuar.')
             else:
                 elapsed = time.time() - t0
-                self.progress.status       = 'completed'
+                self.progress.status       = 'loaded'
+                self.progress.phase        = 'loaded'
                 self.progress.completed_at = datetime.now().isoformat()
+                self.progress.elapsed_seconds = elapsed
                 if elapsed > 0:
                     self.progress.speed_rows_per_sec = (
                         self.progress.rows_migrated / elapsed)
@@ -899,21 +1001,20 @@ Particionamento:
   independentes. Cada thread migra seu slice com checkpoint/resume individual.
   Não altera --threads entre execuções sem usar --reset.
 
-Exemplos de execução ADHOC:
-  uv run {sys.argv[0]} --work-dir MIGRACAO_0001 --master-db MIGRACAO_0001/migration.db
-  uv run {sys.argv[0]} --work-dir MIGRACAO_0001 --threads 8
-  uv run {sys.argv[0]} --work-dir MIGRACAO_0001 --reset (CUIDADO: apaga dados e ignora checkpoints)
+Uso:
+  python migrator_log_eventos.py --threads 8
+  python migrator_log_eventos.py --threads 8 --reset
+  python migrator_log_eventos.py --threads 8 --dry-run
+  python migrator_log_eventos.py --threads 4 --batch-size 5000
+  python migrator_log_eventos.py --generate-scripts-only
 
 Monitor:
-  python monitor.py               ->  vê todas as threads automaticamente
-  python monitor.py --big-tables  ->  filtra só as tabelas grandes
+  python monitor.py               →  vê todas as threads automaticamente
+  python monitor.py --big-tables  →  filtra só as tabelas grandes
         """)
-    ap.add_argument('--work-dir', type=str, required=True, help='Diretório da migração (ex: MIGRACAO_0001)')
-    ap.add_argument('-c', '--config', default=None, help='Arquivo de configuração YAML (padrão: work-dir/config.yaml)')
+    ap.add_argument('-c', '--config', default='config.yaml')
     ap.add_argument('-t', '--threads', type=int, default=8, metavar='N',
                     help='Número de threads paralelas (padrão: 8)')
-    ap.add_argument('--master-db', type=str, default=None)
-    ap.add_argument('--migration-id', type=int, default=None)
     ap.add_argument('--reset', action='store_true',
                     help='Descarta todos os checkpoints e reinicia do zero')
     ap.add_argument('--dry-run', action='store_true',
@@ -925,68 +1026,14 @@ Monitor:
                     help='Apenas gera scripts SQL de constraints')
     args = ap.parse_args()
 
-    # Define config padrão baseado no work-dir se não for informado
-    config_file = args.config if args.config else os.path.join(args.work_dir, 'config.yaml')
-    if not os.path.exists(config_file):
-        print(f"\n[MIGRATOR {SOURCE_TABLE}] Erro: Arquivo de configuração não encontrado: {config_file}")
+    if not Path(args.config).exists():
+        print(f'ERRO: {args.config} não encontrado.')
         sys.exit(1)
-
-    # [MELHORIA] Auto-detecta Master DB e Migration ID
-    master_db = args.master_db
-    mig_id = args.migration_id
-    
-    if not master_db and args.work_dir:
-        auto_db = os.path.join(args.work_dir, 'migration.db')
-        if os.path.exists(auto_db):
-            master_db = auto_db
-            # Tenta pegar o ID automaticamente se não foi passado
-            if not mig_id:
-                try:
-                    conn_m = sqlite3.connect(master_db)
-                    row = conn_m.execute("SELECT id FROM migrations LIMIT 1").fetchone()
-                    if row: mig_id = row[0]
-                    conn_m.close()
-                except: pass
-
-    # Verifica se há algum checkpoint para decidir se avisa sobre Truncate
-    any_restart = False
-    worker_db_paths = [Path(args.work_dir) / f'migration_state_{DEST_TABLE}_t{i}.db' for i in range(args.threads)]
-    for db_path in worker_db_paths:
-        if db_path.exists():
-            try:
-                conn_c = sqlite3.connect(str(db_path))
-                row = conn_c.execute('SELECT progress_json FROM migration_state WHERE id=1').fetchone()
-                conn_c.close()
-                if row:
-                    prog = MigrationProgress.from_dict(json.loads(row[0]))
-                    if prog.status in ('running', 'paused', 'error', 'loaded') and prog.rows_migrated > 0:
-                        any_restart = True
-                        break
-            except: pass
-
-    # Só pede confirmação se for uma carga isolada (sem Maestro) e sem Checkpoints (Fresh Start)
-    if not master_db and not any_restart and not args.dry_run and sys.stdin.isatty():
-        print(f"\n[MIGRATOR {SOURCE_TABLE}] Aviso: Nenhum banco Maestro detectado e nenhum checkpoint encontrado.")
-        print(f"Este script iniciará uma NOVA migração e TRUNCARÁ a tabela {DEST_TABLE} no banco de destino.")
-        confirm = input(f"Deseja continuar com o TRUNCATE? (s/N): ").lower()
-        if confirm != 's':
-            sys.exit(0)
-
-    # Configuração de diretórios
-    global WORK_DIR, LOG_DIR
-    WORK_DIR = Path(args.work_dir)
-    LOG_DIR = WORK_DIR / 'logs'
-    WORK_DIR.mkdir(exist_ok=True, parents=True)
-    LOG_DIR.mkdir(exist_ok=True, parents=True)
 
     log = _setup_main_logger(
         str(LOG_DIR / f'migration_{DEST_TABLE}_parallel.log'))
 
-    # Atualiza args para usar os valores detectados
-    args.master_db = master_db
-    args.migration_id = mig_id
-
-    with open(config_file, 'r', encoding='utf-8') as f:
+    with open(args.config, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
     if args.batch_size:
         config['migration']['batch_size'] = args.batch_size
@@ -1001,7 +1048,7 @@ Monitor:
     }
 
     log.info('=' * 70)
-    log.info(f'  MIGRAÇÃO PARALELA: {SOURCE_TABLE} -> {DEST_TABLE}')
+    log.info(f'  MIGRAÇÃO PARALELA: {SOURCE_TABLE} → {DEST_TABLE}')
     log.info(f'  Threads       : {n_threads}')
     log.info(f'  Partição      : RDB$DB_KEY (sem PK)')
     log.info(f'  Batch         : {config["migration"].get("batch_size", 5000):,}')
@@ -1065,7 +1112,7 @@ Monitor:
         for i, r in enumerate(ranges):
             low_hex  = r['low'].hex()[:16] + '...' if r['low'] else '?'
             high_hex = (r['high'].hex()[:16] + '...' if r['high'] else 'FIM')
-            log.info(f'  Thread {i}: DB_KEY [{low_hex} -> {high_hex}]  '
+            log.info(f'  Thread {i}: DB_KEY [{low_hex} → {high_hex}]  '
                      f'(~{r["rows"]:,} linhas)')
         return
 
@@ -1076,7 +1123,7 @@ Monitor:
     for i, r in enumerate(ranges):
         low_hex  = r['low'].hex()[:16] + '...' if r['low'] else '?'
         high_hex = (r['high'].hex()[:16] + '...' if r['high'] else 'FIM')
-        log.info(f'  Thread {i}: DB_KEY [{low_hex} -> {high_hex}]  '
+        log.info(f'  Thread {i}: DB_KEY [{low_hex} → {high_hex}]  '
                  f'(~{r["rows"]:,} linhas)')
 
     # Detectar resume
@@ -1103,9 +1150,9 @@ Monitor:
         for db_path in worker_db_paths:
             if db_path.exists():
                 StateManager(db_path).reset()
-        master_path = args.master_db if args.master_db else WORK_DIR / f'migration_state_{DEST_TABLE}.db'
-        if Path(master_path).exists():
-            StateManager(master_path, migration_id=args.migration_id, table_name=SOURCE_TABLE).reset()
+        master_path = WORK_DIR / f'migration_state_{DEST_TABLE}.db'
+        if master_path.exists():
+            StateManager(master_path).reset()
 
     if any_restart:
         log.info('  Retomando de checkpoint — TRUNCATE ignorado.')
@@ -1122,23 +1169,15 @@ Monitor:
     log.info(f'  Fase 2 — Carga paralela ({n_threads} threads)')
     log.info('━' * 70)
 
-    master_state_path = args.master_db if args.master_db else WORK_DIR / f'migration_state_{DEST_TABLE}.db'
-    master_state      = StateManager(master_state_path, migration_id=args.migration_id, table_name=SOURCE_TABLE)
-    
-    # [CHECK] Se já estiver concluído, encerra
-    saved = master_state.load_progress()
-    if saved and (saved.status == 'completed' or saved.status == 'loaded') and not args.reset:
-        log.info(f'  [INFO] Tabela {SOURCE_TABLE} já concluída anteriormente. Pulando.')
-        sys.exit(0)
-
+    master_state_path = WORK_DIR / f'migration_state_{DEST_TABLE}.db'
+    master_state      = StateManager(master_state_path)
     if not any_restart:
         master_state.reset()
     master_state.save_progress(MigrationProgress(
         source_table=SOURCE_TABLE, dest_table=DEST_TABLE,
-        total_rows=total_rows, status='running',
+        total_rows=total_rows, status='running', phase='migrating',
         started_at=datetime.now().isoformat(),
-        use_db_key=True,
-        category='parallel_dbkey'))
+        constraints_disabled=True, use_db_key=True))
 
     shutdown = threading.Event()
 
@@ -1192,9 +1231,9 @@ Monitor:
     master_state.save_progress(MigrationProgress(
         source_table=SOURCE_TABLE, dest_table=DEST_TABLE,
         total_rows=total_rows, rows_migrated=total_migrated,
-        rows_failed=total_failed, status=final_status,
-        completed_at=datetime.now().isoformat(),
-        use_db_key=True,
+        rows_failed=total_failed, status=final_status, phase=final_status,
+        elapsed_seconds=elapsed, completed_at=datetime.now().isoformat(),
+        use_db_key=True, constraints_disabled=True,
         speed_rows_per_sec=(total_migrated / elapsed if elapsed > 0 else 0),
         updated_at=datetime.now().isoformat()))
 
@@ -1216,8 +1255,6 @@ Monitor:
         log.info(f'  Recriar constraints:')
         log.info(f'    psql -f {enable_path.name}')
     log.info('=' * 70)
-
-    sys.exit(1 if error_workers else 0)
 
 
 if __name__ == '__main__':
