@@ -68,12 +68,12 @@ All migrators share: checkpoint to SQLite, COPY protocol insertion, sub-batch re
 
 ### Monitoring
 
-`monitor_oldschool_v2_updated.py` reads `migration.db` inside a `MIGRACAO_<SEQ>/` directory and renders a Rich TUI dashboard with progress bars, ETA, and speed. Call signature differs from legacy: takes the migration directory as a positional argument.
+`monitor.py` reads `migration.db` inside a `MIGRACAO_<SEQ>/` directory and renders a Rich TUI dashboard with progress bars, ETA, and speed. Call signature differs from legacy: takes the migration directory as a positional argument.
 
 ```bash
-python monitor_oldschool_v2_updated.py MIGRACAO_0005              # all tables
-python monitor_oldschool_v2_updated.py MIGRACAO_0005 --big-tables
-python monitor_oldschool_v2_updated.py MIGRACAO_0005 --small-tables
+python monitor.py MIGRACAO_0005              # all tables
+python monitor.py MIGRACAO_0005 --big-tables
+python monitor.py MIGRACAO_0005 --small-tables
 ```
 
 ### MCP Server
@@ -129,8 +129,8 @@ python migrator_log_eventos_v2.py --threads 8
 python migrator_smalltables_v2.py --small-tables
 
 # Monitor progress (Rich TUI)
-python monitor_oldschool_v2_updated.py MIGRACAO_0005
-python monitor_oldschool_v2_updated.py MIGRACAO_0005 --big-tables
+python monitor.py MIGRACAO_0005
+python monitor.py MIGRACAO_0005 --big-tables
 
 # Post-migration validation
 python compara_estrutura_fb2pg.py

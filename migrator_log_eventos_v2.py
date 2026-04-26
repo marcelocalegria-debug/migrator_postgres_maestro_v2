@@ -1107,13 +1107,6 @@ Monitor:
         if Path(master_path).exists():
             StateManager(master_path, migration_id=args.migration_id, table_name=SOURCE_TABLE).reset()
 
-    if any_restart:
-        log.info('  Retomando de checkpoint — TRUNCATE ignorado.')
-    else:
-        log.info('')
-        log.info(f'  Truncando {DEST_TABLE}...')
-        truncate_table(config, log)
-
     # ══════════════════════════════════════════════════════════
     #  FASE 2 — Carga paralela
     # ══════════════════════════════════════════════════════════
@@ -1124,12 +1117,19 @@ Monitor:
 
     master_state_path = args.master_db if args.master_db else WORK_DIR / f'migration_state_{DEST_TABLE}.db'
     master_state      = StateManager(master_state_path, migration_id=args.migration_id, table_name=SOURCE_TABLE)
-    
-    # [CHECK] Se já estiver concluído, encerra
+
+    # [CHECK] Se já estiver concluído, encerra ANTES do truncate
     saved = master_state.load_progress()
     if saved and (saved.status == 'completed' or saved.status == 'loaded') and not args.reset:
         log.info(f'  [INFO] Tabela {SOURCE_TABLE} já concluída anteriormente. Pulando.')
         sys.exit(0)
+
+    if any_restart:
+        log.info('  Retomando de checkpoint — TRUNCATE ignorado.')
+    else:
+        log.info('')
+        log.info(f'  Truncando {DEST_TABLE}...')
+        truncate_table(config, log)
 
     if not any_restart:
         master_state.reset()

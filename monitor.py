@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-monitor_oldschool_v2_updated.py
-===============================
+monitor.py
+==========
 Versão restaurada e atualizada do monitor clássico para o Maestro V2.
 Acompanha progresso de Big Tables e Small Tables.
 
 Uso:
-    python monitor_oldschool_v2_updated.py MIGRACAO_0005
-    python monitor_oldschool_v2_updated.py MIGRACAO_0005 --small-tables
-    python monitor_oldschool_v2_updated.py MIGRACAO_0005 --big-tables
+    python monitor.py MIGRACAO_0005
+    python monitor.py MIGRACAO_0005 --small-tables
+    python monitor.py MIGRACAO_0005 --big-tables
 """
 
 import sys
@@ -101,7 +101,7 @@ def _read_progress(db_path: Path, table_name: str = None, retries: int = 3) -> d
             time.sleep(0.1)
     return {}
 
-def _read_master_state(db_path: Path) -> dict:
+def _read_master_state(db_path: Path, retries: int = 3) -> dict:
     """Lê o estado de todas as tabelas do mestre (migration.db)."""
     result = {
         'summary': {'pending': 0, 'running': 0, 'completed': 0, 'failed': 0, 'total': 0},
@@ -110,28 +110,31 @@ def _read_master_state(db_path: Path) -> dict:
         'all_tables': []
     }
     if not db_path.exists(): return result
-    try:
-        conn = sqlite3.connect(str(db_path), timeout=3)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute("SELECT * FROM tables").fetchall()
-        for r in rows:
-            d = dict(r)
-            status = d['status'].lower()
-            if status in result['summary']:
-                result['summary'][status] += 1
-            elif status == 'loaded':
-                result['summary']['completed'] += 1
-            
-            result['summary']['total'] += 1
-            result['all_tables'].append(d)
-            
-            if status == 'running':
-                result['running_tables'].append(d)
-            if status == 'error' or status == 'failed':
-                result['recent_failed'].append(d)
-        conn.close()
-    except Exception:
-        pass
+    for attempt in range(retries):
+        try:
+            conn = sqlite3.connect(str(db_path), timeout=5)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM tables").fetchall()
+            for r in rows:
+                d = dict(r)
+                status = d['status'].lower()
+                if status in result['summary']:
+                    result['summary'][status] += 1
+                elif status == 'loaded':
+                    result['summary']['completed'] += 1
+
+                result['summary']['total'] += 1
+                result['all_tables'].append(d)
+
+                if status == 'running':
+                    result['running_tables'].append(d)
+                if status in ('error', 'failed'):
+                    result['recent_failed'].append(d)
+            conn.close()
+            return result
+        except Exception:
+            if attempt < retries - 1:
+                time.sleep(0.2)
     return result
 
 # ─── descoberta ─────────────────────────────────────────────────────────────
@@ -243,7 +246,19 @@ def display_small_tables(master_db: Path, interval: float):
     console = Console()
     def build():
         state = _read_master_state(master_db)
-        s = state['summary']
+        
+        s = {'pending': 0, 'running': 0, 'completed': 0, 'failed': 0, 'total': 0}
+        for t in state['all_tables']:
+            if t['source_table'] in BIG_TABLES_LIST:
+                continue
+            
+            st = t['status'].lower()
+            if st in s:
+                s[st] += 1
+            elif st == 'loaded':
+                s['completed'] += 1
+            s['total'] += 1
+            
         pct = (s['completed'] / s['total'] * 100) if s['total'] else 0
         
         header = Panel(
@@ -260,7 +275,7 @@ def display_small_tables(master_db: Path, interval: float):
             if t['source_table'] in BIG_TABLES_LIST:
                 continue
                 
-            if t['status'] in ('running', 'error', 'failed'):
+            if t['status'].lower() in ('running', 'error', 'failed'):
                 active_sources.append((master_db, t['source_table']))
         
         # Ordena por nome para evitar que as linhas fiquem pulando de posição
@@ -283,11 +298,11 @@ def main():
     if len(sys.argv) == 1:
         print("\n[!] Uso do Monitor SCCI Maestro V2:")
         print("\n  1. Para ver tudo da sessão 0005:")
-        print("      python monitor_oldschool_v2_updated.py MIGRACAO_0005")
+        print("      python monitor.py MIGRACAO_0005")
         print("\n  2. Para ver especificamente o progresso das 900+ tabelas pequenas:")
-        print("      python monitor_oldschool_v2_updated.py MIGRACAO_0005 --small-tables")
+        print("      python monitor.py MIGRACAO_0005 --small-tables")
         print("\n  3. Para focar apenas nas 10 Big Tables:")
-        print("      python monitor_oldschool_v2_updated.py MIGRACAO_0005 --big-tables\n")
+        print("      python monitor.py MIGRACAO_0005 --big-tables\n")
         sys.exit(0)
 
     ap = argparse.ArgumentParser(description='Monitor SCCI Maestro V2')

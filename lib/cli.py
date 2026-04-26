@@ -1,6 +1,7 @@
 import os
 import sys
 import asyncio
+import shutil
 import psycopg2
 from pathlib import Path
 from typing import List, Optional
@@ -43,7 +44,7 @@ class MaestroCLI:
         
         self.commands = [
             "/init", "/resume", "/load", "/status", "/check", "/compare",
-            "/monitor", "/run", "/rerun", "/agent", "/help", "/quit"
+            "/monitor", "/run", "/rerun", "/rerun-only", "/reset-table", "/ignore", "/agent", "/help", "/quit"
         ]
         self.completer = WordCompleter(self.commands)
         self.session = PromptSession(completer=self.completer)
@@ -128,7 +129,7 @@ class MaestroCLI:
                     elif cmd == "/resume" or cmd == "/load":
                         self.do_resume(args)
                     elif cmd == "/status":
-                        self.do_status()
+                        self.do_status(args)
                     elif cmd == "/check":
                         self.do_check()
                     elif cmd == "/compare":
@@ -139,6 +140,12 @@ class MaestroCLI:
                         self.do_run(args)
                     elif cmd == "/rerun":
                         self.do_rerun(args)
+                    elif cmd == "/rerun-only":
+                        self.do_rerun_only(args)
+                    elif cmd == "/reset-table":
+                        self.do_reset_table(args)
+                    elif cmd == "/ignore":
+                        self.do_ignore(args)
                     elif cmd == "/agent":
                         self.do_agent()
                     else:
@@ -161,11 +168,14 @@ class MaestroCLI:
         table.add_row("/init", "Inicia uma nova migração (MIGRACAO_XXXX)")
         table.add_row("/resume [seq]", "Lista ou carrega uma migração existente")
         table.add_row("/load [seq]", "Alias para /resume (carrega migração)")
-        table.add_row("/status", "Mostra o progresso atual dos steps")
+        table.add_row("/status [step]", "Mostra progresso global ou detalhamento de tabelas (5 e 6).")
         table.add_row("/check", "Verifica conectividade, disco e script de ajuste FB")
         table.add_row("/compare", "Compara estrutura entre bancos origem e destino")
-        table.add_row("/run [step]", "Executa a migração (de um passo ou todos)")
-        table.add_row("/rerun <step>", "Força a reexecução de um passo concluído")
+        table.add_row("/run [step]", "Execução INCREMENTAL: Pula passos já concluídos (OK).")
+        table.add_row("/rerun <step>", "Execução FORÇADA: Ignora status OK e reinicia a pipeline deste ponto.")
+        table.add_row("/rerun-only <step>", "Execução ISOLADA: Reseta e executa SOMENTE o passo especificado.")
+        table.add_row("/reset-table <nome>", "Reseta status de uma tabela específica para re-migração.")
+        table.add_row("/ignore <nome>", "Marca uma tabela como OK manualmente (ignora erros).")
         table.add_row("/monitor", "Abre o dashboard interativo de monitoramento")
         table.add_row("/agent", "Inicia chat com Agente IA para análise de dados")
         table.add_row("/help", "Mostra esta ajuda")
@@ -176,18 +186,44 @@ class MaestroCLI:
         if not self.current_seq:
             self.console.print("[yellow]Nenhuma migração ativa. Use /init ou /resume primeiro.[/yellow]")
             return
-        
+
         mig_info = self.db.get_migration_by_seq(self.current_seq)
+        mig_dir = self.project.get_migration_dir(self.current_seq)
+
+        # Se ajusta_base_firebird.sql não existe, oferece copiar um .sql da raiz antes do precheck
+        adjust_path = mig_dir / "ajusta_base_firebird.sql"
+        if not adjust_path.exists():
+            sql_files = sorted(Path(".").glob("*.sql"))
+            if sql_files:
+                self.console.print(f"\n[yellow]ajusta_base_firebird.sql não encontrado em {mig_dir.name}.[/yellow]")
+                self.console.print("[bold cyan]Arquivos .sql disponíveis na raiz:[/bold cyan]")
+                for i, f in enumerate(sql_files, 1):
+                    size_kb = f.stat().st_size // 1024
+                    self.console.print(f"  [[bold]{i}[/bold]] {f.name}  ({size_kb} KB)")
+                self.console.print("  [[bold]0[/bold]] Não copiar nenhum (continuar sem o arquivo)")
+
+                choice = self.session.prompt("\nSelecione o arquivo para copiar como ajusta_base_firebird.sql [0]: ").strip()
+                if choice and choice != '0':
+                    try:
+                        idx = int(choice) - 1
+                        if 0 <= idx < len(sql_files):
+                            shutil.copy2(sql_files[idx], adjust_path)
+                            self.console.print(f"[green]Copiado: {sql_files[idx].name} -> {adjust_path.name}[/green]")
+                        else:
+                            self.console.print("[yellow]Seleção fora do intervalo. Continuando sem o arquivo.[/yellow]")
+                    except ValueError:
+                        self.console.print("[yellow]Entrada inválida. Continuando sem o arquivo.[/yellow]")
+            else:
+                self.console.print(f"[yellow]Nenhum .sql na raiz disponível para copiar como ajusta_base_firebird.sql.[/yellow]")
+
         self.console.print(f"[bold cyan]--- Executando Verificações (Migration {self.current_seq}) ---[/bold cyan]")
-        
+
         # PRECHECK é o step 0
         precheck = PrecheckStep(mig_info['id'], self.db, self.config, 0)
         if precheck.run():
             self.console.print("[bold green][OK] Conectividade e pré-requisitos validados.[/bold green]")
-            
-            # [NOVO] Execução do ajusta_base_firebird.sql (Human-in-the-loop)
-            mig_dir = self.project.get_migration_dir(self.current_seq)
-            adjust_path = mig_dir / "ajusta_base_firebird.sql"
+
+            # Execução do ajusta_base_firebird.sql (Human-in-the-loop)
             
             if adjust_path.exists():
                 self.console.print(f"\n[yellow]Atenção: Script de correção '{adjust_path.name}' detectado.[/yellow]")
@@ -241,7 +277,10 @@ class MaestroCLI:
             
             # Usa o charset configurado ou fallback para UTF8
             charset = fb.get('charset', 'UTF8').upper()
-            if charset == 'WIN1252': charset = 'WIN1252'
+            # Normaliza nomes ISO que o Firebird não reconhece
+            _charset_map = {'ISO-8859-1': 'ISO8859_1', 'ISO8859-1': 'ISO8859_1',
+                            'LATIN-1': 'LATIN1', 'ISO-8859-15': 'ISO8859_15'}
+            charset = _charset_map.get(charset, charset)
             
             conn = fdb.connect(
                 host=fb['host'], 
@@ -390,20 +429,45 @@ class MaestroCLI:
             self.console.print("[red]Arquivo config.yaml não encontrado na raiz.[/red]")
             return
 
-        # [REQUISITO 2] Verifica se já existe o banco no destino
+        # O banco DEVE ser criado pelo DBA de antemão. Se já existe: OK. Se não: avisa.
         db_name = self._check_db_exists(config_file)
         if db_name:
-            self.console.print(f"[bold red]ERRO:[/bold red] O banco de destino '[bold cyan]{db_name}[/bold cyan]' já existe no PostgreSQL.")
-            self.console.print("[yellow]Para evitar proliferar diretórios de migração duplicados, use /resume ou apague o banco no PG.[/yellow]")
-            confirm = self.session.prompt(f"Deseja prosseguir com a criação da MIGRACAO mesmo assim? (s/N): ").lower()
+            self.console.print(f"[bold green][OK][/bold green] Banco de destino '[bold cyan]{db_name}[/bold cyan]' já existe no PostgreSQL e será utilizado.")
+        else:
+            self.console.print("[bold yellow][AVISO][/bold yellow] Banco de destino não encontrado no PostgreSQL.")
+            self.console.print("[yellow]O banco deve ser criado pelo DBA antes de prosseguir com a migração.[/yellow]")
+            confirm = self.session.prompt("Deseja prosseguir mesmo assim? (s/N): ").strip().lower()
             if confirm != 's':
                 return
 
         seq = self.project.get_next_seq()
-        schema_file = Path("schema.sql")
-        
+
+        # Lista arquivos .sql na raiz para seleção do schema.sql
+        sql_files = sorted(Path(".").glob("*.sql"))
+        schema_file = None
+        if sql_files:
+            self.console.print("\n[bold cyan]Arquivos .sql disponíveis na raiz:[/bold cyan]")
+            for i, f in enumerate(sql_files, 1):
+                size_kb = f.stat().st_size // 1024
+                self.console.print(f"  [[bold]{i}[/bold]] {f.name}  ({size_kb} KB)")
+            self.console.print("  [[bold]0[/bold]] Não copiar nenhum (schema.sql deverá ser colocado manualmente)")
+
+            choice = self.session.prompt("\nSelecione o arquivo para usar como schema.sql [0]: ").strip()
+            if choice and choice != '0':
+                try:
+                    idx = int(choice) - 1
+                    if 0 <= idx < len(sql_files):
+                        schema_file = sql_files[idx]
+                        self.console.print(f"[green]Selecionado: {schema_file.name}[/green]")
+                    else:
+                        self.console.print("[yellow]Seleção fora do intervalo. schema.sql não será copiado.[/yellow]")
+                except ValueError:
+                    self.console.print("[yellow]Entrada inválida. schema.sql não será copiado.[/yellow]")
+        else:
+            self.console.print(f"[yellow]Nenhum .sql encontrado na raiz. Coloque o schema.sql manualmente em MIGRACAO_{seq}/.[/yellow]")
+
         # 1. Cria diretórios
-        mig_dir = self.project.init_migration(seq, config_file, schema_file if schema_file.exists() else None)
+        mig_dir = self.project.init_migration(seq, config_file, schema_file)
         
         # 2. Inicializa Banco Maestro dentro da pasta da migração
         self.db = MigrationDB(mig_dir / "migration.db")
@@ -426,10 +490,19 @@ class MaestroCLI:
 
         # 5. Registra os steps iniciais (S04 REMOVIDO)
         step_names = [
-            'PRECHECK', 'CREATE_DATABASE', 'IMPORT_SCHEMA', 'COMPARE_PRE',
-            'DISABLE_CONSTRAINTS', 'MIGRATE_ALL_DATA',
-            'ENABLE_CONSTRAINTS', 'SEQUENCES', 'COMPARE_POST', 'VALIDATE',
-            'ANALYZE', 'REPORT'
+            'PRECHECK',          # 0
+            'CREATE_DATABASE',   # 1
+            'IMPORT_SCHEMA',     # 2
+            'COMPARE_PRE',       # 3
+            'DISABLE_CONSTRAINTS', # 4
+            'MIGRATE_BIG',       # 5
+            'MIGRATE_SMALL',     # 6
+            'ENABLE_CONSTRAINTS',# 7
+            'SEQUENCES',         # 8
+            'COMPARE_POST',      # 9
+            'VALIDATE',          # 10
+            'ANALYZE',           # 11
+            'REPORT'             # 12
         ]
         mig_info = self.db.get_migration_by_seq(seq)
         self.db.create_steps(mig_info['id'], step_names)
@@ -472,12 +545,77 @@ class MaestroCLI:
         self.config = MigrationConfig(mig_dir / "config.yaml")
         self.console.print(f"[green]Retomando migração {seq}[/green]")
 
-    def do_status(self):
+    def do_status(self, args):
         if not self.current_seq:
             self.console.print("[yellow]Nenhuma migração ativa. Use /init ou /resume.[/yellow]")
             return
         
         mig_info = self.db.get_migration_by_seq(self.current_seq)
+
+        if args:
+            try:
+                step_num = int(args[0])
+                if step_num not in (5, 6):
+                    self.console.print(f"[yellow]O detalhamento de status via /status <step> só está disponível para os passos 5 (Big) e 6 (Small).[/yellow]")
+                    return
+                
+                # Obtém lista de exclusão do config.yaml (as 10 big tables)
+                # Tenta na raiz ou dentro de 'migration' (conforme seu config.yaml)
+                migration_cfg = self.config.data.get('migration', {})
+                exclude_list = migration_cfg.get('exclude_tables', [])
+                if not exclude_list:
+                    exclude_list = self.config.data.get('exclude_tables', [])
+                
+                exclude_list = [t.upper() for t in exclude_list]
+                
+                all_tables = self.db.list_tables(mig_info['id'])
+                
+                if step_num == 5:
+                    # Passo 5: Apenas as tabelas na lista de exclusão
+                    target_tables = [t for t in all_tables if t['source_table'].upper() in exclude_list]
+                else:
+                    # Passo 6: Tudo o que NÃO está na lista de exclusão
+                    target_tables = [t for t in all_tables if t['source_table'].upper() not in exclude_list]
+                
+                if not target_tables:
+                    self.console.print(f"[yellow]Nenhuma tabela encontrada para o passo {step_num}.[/yellow]")
+                    return
+
+                table = Table(title=f"Detalhes das Tabelas - Passo {step_num}")
+                table.add_column("Tabela Origem", style="cyan")
+                table.add_column("Status")
+                table.add_column("Linhas Migradas", justify="right")
+                table.add_column("Erro")
+                
+                completed_count = 0
+                shown_count = 0
+                
+                for t in target_tables:
+                    if t['status'] in ('completed', 'loaded'):
+                        completed_count += 1
+                        continue
+                    
+                    shown_count += 1
+                    status_style = "yellow" if t['status'] == 'running' else "red" if t['status'] == 'failed' else "white"
+                    table.add_row(
+                        t['source_table'],
+                        f"[{status_style}]{t['status']}[/{status_style}]",
+                        f"{t['rows_migrated']:,}",
+                        t['error_message'] or "-"
+                    )
+                
+                if shown_count > 0:
+                    self.console.print(table)
+                    self.console.print(f"[dim]Resumo: {completed_count} tabelas concluídas (OK), {shown_count} pendentes/falhas.[/dim]")
+                else:
+                    self.console.print(f"[bold green][OK] Todas as {len(target_tables)} tabelas do passo {step_num} foram concluídas com sucesso.[/bold green]")
+                return
+
+            except ValueError:
+                self.console.print("[red]O argumento de /status deve ser o número do step.[/red]")
+                return
+
+        # Comportamento padrão (Geral)
         steps = self.db.list_steps(mig_info['id'])
         
         table = Table(title=f"Status da Migração {self.current_seq}")
@@ -498,6 +636,7 @@ class MaestroCLI:
             )
         
         self.console.print(table)
+        self.console.print("[dim]Dica: Use '/status 5' ou '/status 6' para ver detalhes das tabelas.[/dim]")
 
     def do_run(self, args):
         if not self.current_seq:
@@ -529,7 +668,21 @@ class MaestroCLI:
             except ValueError:
                 self.console.print("[red]O argumento de /run deve ser o número do step.[/red]")
                 return
-        
+
+        # Verificar se constraints estão desabilitadas de execução anterior
+        steps = self.db.list_steps(mig_info['id'])
+        disable_done = any(s['step_name'] == 'DISABLE_CONSTRAINTS' and s['status'] == 'completed' for s in steps)
+        enable_done = any(s['step_name'] == 'ENABLE_CONSTRAINTS' and s['status'] == 'completed' for s in steps)
+        if disable_done and not enable_done:
+            self.console.print(
+                "[bold red]AVISO:[/bold red] Constraints estão desabilitadas de execução anterior!\n"
+                "Se continuar sem re-habilitar, dados podem ser inseridos sem validação FK/PK.\n"
+                "Para corrigir: [bold]python enable_constraints.py[/bold] ou [bold]/run 7[/bold]"
+            )
+            confirm = self.session.prompt("Continuar mesmo assim? (s/N): ").strip().lower()
+            if confirm != 's':
+                return
+
         self.runner.run_all(start_at=start_at)
 
     def do_rerun(self, args):
@@ -554,18 +707,35 @@ class MaestroCLI:
             self.console.print(f"[red]Passo {step_num} não encontrado.[/red]")
             return
             
-        # [MELHORIA] Identifica tabelas para limpar progresso físico
+        # Confirmação antes de destruir estado
+        confirm = self.session.prompt(
+            f"Resetar step {step_num} ({step['step_name']}) e re-executar? "
+            f"Arquivos de estado serão apagados. (s/N): "
+        ).strip().lower()
+        if confirm != 's':
+            self.console.print("[yellow]Operação cancelada.[/yellow]")
+            return
+
+        # [MELHORIA] Identifica tabelas para limpar progresso físico e no banco
         self.console.print(f"[yellow]Resetando status do passo {step_num} ({step['step_name']}) para 'pending'...[/yellow]")
         self.db.update_step(mig_info['id'], step_num, 'pending')
         
+        # Reset de tabelas no banco mestre (SQLite)
+        if step_num == 5: # MigrateBigStep
+            self.db.reset_tables(mig_info['id'], category='big')
+            self.db.reset_tables(mig_info['id'], category='parallel_dbkey')
+            self.console.print("[green]Status das Big Tables resetado no banco mestre.[/green]")
+        elif step_num == 6: # MigrateSmallStep
+            self.db.reset_tables(mig_info['id'], category='small')
+            self.console.print("[green]Status das Small Tables resetado no banco mestre.[/green]")
+
         # Limpeza de arquivos de estado (.db) para forçar o TRUNCATE nos scripts paralelos
-        # Isso garante que a reexecução seja considerada um "fresh start"
-        mig_dir = Path(f"MIGRACAO_{self.current_seq}")
+        mig_dir = self.project.get_migration_dir(self.current_seq)
         work_dir = mig_dir
         
         patterns = []
         if step_num == 5: # MigrateBigStep
-            patterns = ["migration_state_documento_operacao*.db", "migration_state_log_eventos*.db", "migration_state_ocorrencia_sisat*.db"]
+            patterns = ["migration_state_*.db"] # Limpa todos os estados (grandes e pequenas)
         elif step_num == 6: # MigrateSmallStep
             patterns = ["migration_state_*.db"] # Limpa todos os estados de small tables
             
@@ -586,19 +756,159 @@ class MaestroCLI:
         # Chama o do_run a partir deste passo
         self.do_run([str(step_num)])
 
+    def do_rerun_only(self, args):
+        """Reseta e executa SOMENTE o passo especificado, sem pipeline."""
+        if not self.current_seq:
+            self.console.print("[yellow]Nenhuma migração ativa.[/yellow]")
+            return
+        
+        if not args:
+            self.console.print("[red]Uso: /rerun-only <step_number>[/red]")
+            return
+            
+        try:
+            step_num = int(args[0])
+        except ValueError:
+            self.console.print("[red]O argumento de /rerun-only deve ser o número do step.[/red]")
+            return
+
+        mig_info = self.db.get_migration_by_seq(self.current_seq)
+        step = self.db.get_step(mig_info['id'], step_num)
+        
+        if not step:
+            self.console.print(f"[red]Passo {step_num} não encontrado.[/red]")
+            return
+            
+        # Confirmação
+        confirm = self.session.prompt(
+            f"Resetar e executar SOMENTE o passo {step_num} ({step['step_name']})? (s/N): "
+        ).strip().lower()
+        if confirm != 's':
+            self.console.print("[yellow]Operação cancelada.[/yellow]")
+            return
+
+        # Reset de status do step
+        self.db.update_step(mig_info['id'], step_num, 'pending')
+        
+        # Se for passo de dados, reset de tabelas e arquivos
+        if step_num in (5, 6):
+            cat = 'big' if step_num == 5 else 'small'
+            self.db.reset_tables(mig_info['id'], category=cat)
+            if step_num == 5:
+                self.db.reset_tables(mig_info['id'], category='parallel_dbkey')
+            
+            mig_dir = self.project.get_migration_dir(self.current_seq)
+            for f in mig_dir.glob("migration_state_*.db"):
+                try: f.unlink()
+                except: pass
+            self.console.print(f"[green]Estado das tabelas de {cat} limpo.[/green]")
+
+        # Executa isoladamente
+        self.runner = StepRunner(mig_info['id'], self.db, self.config)
+        # Registra os steps na pipeline para que o runner saiba qual classe instanciar
+        self.runner.add_step(PrecheckStep, 0)
+        self.runner.add_step(CreateDatabaseStep, 1)
+        self.runner.add_step(ImportSchemaStep, 2)
+        self.runner.add_step(ComparePreStep, 3)
+        self.runner.add_step(DisableConstraintsStep, 4)
+        self.runner.add_step(MigrateBigStep, 5)
+        self.runner.add_step(MigrateSmallStep, 6)
+        self.runner.add_step(EnableConstraintsStep, 7)
+        self.runner.add_step(SequencesStep, 8)
+        self.runner.add_step(ComparePostStep, 9)
+        self.runner.add_step(ValidateStep, 10)
+        self.runner.add_step(AnalyzeStep, 11)
+        self.runner.add_step(ReportStep, 12)
+
+        self.runner.run_one(step_num)
+
+    def do_reset_table(self, args):
+        """Reseta o status de uma única tabela para forçar re-migração."""
+        if not self.current_seq:
+            self.console.print("[yellow]Nenhuma migração ativa.[/yellow]")
+            return
+        
+        if not args:
+            self.console.print("[red]Uso: /reset-table <nome_tabela>[/red]")
+            return
+            
+        table_name = args[0]
+        mig_info = self.db.get_migration_by_seq(self.current_seq)
+        
+        # 1. Reseta no banco Maestro e descobre a categoria
+        category = self.db.reset_table_status(mig_info['id'], table_name)
+        
+        if not category:
+            self.console.print(f"[red]Tabela '{table_name}' não encontrada nesta migração.[/red]")
+            return
+
+        # 2. Apaga arquivo físico de checkpoint
+        mig_dir = self.project.get_migration_dir(self.current_seq)
+        # Tenta vários padrões de nome comuns
+        patterns = [
+            f"migration_state_{table_name.lower()}.db",
+            f"migration_state_{table_name.upper()}.db",
+            f"migration_state_{table_name}.db"
+        ]
+        
+        deleted_file = False
+        for p in patterns:
+            f = mig_dir / p
+            if f.exists():
+                try:
+                    f.unlink()
+                    deleted_file = True
+                except: pass
+        
+        # 3. Sincroniza o status do Step pai para 'pending'
+        # Assim o /run não pulará o passo.
+        parent_step = 5 if category in ('big', 'parallel_dbkey', 'parallel_pk') else 6
+        self.db.update_step(mig_info['id'], parent_step, 'pending')
+        
+        msg = f"[green]Tabela {table_name} resetada com sucesso![/green]\n"
+        msg += f"[dim]- Categoria: {category}[/dim]\n"
+        msg += f"[dim]- Passo {parent_step} marcado como pendente para permitir re-migração.[/dim]"
+        if deleted_file:
+            msg += "\n[dim]- Arquivo de checkpoint físico removido.[/dim]"
+            
+        self.console.print(Panel(msg, title="Reset Cirúrgico"))
+
+    def do_ignore(self, args):
+        """Marca uma tabela como concluída manualmente para destravar a pipeline."""
+        if not self.current_seq:
+            self.console.print("[yellow]Nenhuma migração ativa.[/yellow]")
+            return
+        
+        if not args:
+            self.console.print("[red]Uso: /ignore <nome_tabela>[/red]")
+            return
+            
+        table_name = args[0]
+        mig_info = self.db.get_migration_by_seq(self.current_seq)
+        
+        # 1. Marca como ignorada no banco
+        category = self.db.ignore_table(mig_info['id'], table_name)
+        
+        if not category:
+            self.console.print(f"[red]Tabela '{table_name}' não encontrada.[/red]")
+            return
+
+        # 2. Sincroniza o Step pai para 'pending' para re-avaliação
+        parent_step = 5 if category in ('big', 'parallel_dbkey', 'parallel_pk') else 6
+        self.db.update_step(mig_info['id'], parent_step, 'pending')
+        
+        self.console.print(f"[green][OK] Tabela {table_name} marcada como concluída manualmente.[/green]")
+        self.console.print(f"[dim]O passo {parent_step} foi marcado como pendente para que o próximo /run avance na pipeline.[/dim]")
+
     def do_monitor(self):
         if not self.current_seq:
             self.console.print("[yellow]Nenhuma migração ativa.[/yellow]")
             return
         
-        # O monitor.py original pode ser usado ou adaptado.
-        # Por simplicidade, vamos chamar o monitor.py passando o master-db.
         mig_dir = self.project.get_migration_dir(self.current_seq)
-        master_db = mig_dir / "migration.db"
-        
+
         import subprocess
         try:
-            # Abre o monitor em um novo processo que assume o terminal
-            subprocess.run([sys.executable, 'monitor.py', '--db', str(master_db.absolute())])
+            subprocess.run([sys.executable, 'monitor.py', str(mig_dir.absolute())])
         except KeyboardInterrupt:
             pass

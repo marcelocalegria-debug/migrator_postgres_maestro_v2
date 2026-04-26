@@ -11,17 +11,18 @@ class CreateDatabaseStep(StepBase):
         pg = self.config.postgres
         target_db = pg['database']
         target_user = pg['user']
-        target_ts = pg.get('tablespace', 'DEFAULT')
+        # None quando não configurado — evita tratar 'DEFAULT' como tablespace válida
+        target_ts = pg.get('tablespace') or None
 
         print(f"--- Validando Ambiente PostgreSQL para: {target_db} ---")
 
         try:
             # Conecta ao banco 'postgres' como superuser para validação
             conn = psycopg2.connect(
-                host=pg['host'], 
+                host=pg['host'],
                 port=pg.get('port', 5432),
                 database='postgres',
-                user=pg['user'], 
+                user=pg['user'],
                 password=pg['password']
             )
             cur = conn.cursor()
@@ -38,17 +39,18 @@ class CreateDatabaseStep(StepBase):
                 self._print_manual_sql(target_db, target_user, target_ts)
                 return False
 
-            # 2. Validação de Tablespace
-            if target_ts.lower() in ('pg_default', 'pg_global', 'default'):
-                print(f"[ERROR] Tablespace '{target_ts}' (padrão do sistema) não é permitida para o banco de dados da aplicação. Use uma tablespace dedicada (ex: tbs_{target_db}).")
-                self._print_manual_sql(target_db, target_user, target_ts)
-                return False
+            # 2. Validação de Tablespace (só valida config quando explicitamente definida)
+            if target_ts is not None:
+                if target_ts.lower() in ('pg_default', 'pg_global', 'default'):
+                    print(f"[ERROR] Tablespace '{target_ts}' (padrão do sistema) não é permitida para o banco de dados da aplicação. Use uma tablespace dedicada (ex: tbs_{target_db}).")
+                    self._print_manual_sql(target_db, target_user, target_ts)
+                    return False
 
-            cur.execute("SELECT 1 FROM pg_tablespace WHERE spcname = %s", (target_ts,))
-            if not cur.fetchone():
-                print(f"[ERROR] Tablespace '{target_ts}' não encontrada no PostgreSQL.")
-                self._print_manual_sql(target_db, target_user, target_ts)
-                return False
+                cur.execute("SELECT 1 FROM pg_tablespace WHERE spcname = %s", (target_ts,))
+                if not cur.fetchone():
+                    print(f"[ERROR] Tablespace '{target_ts}' não encontrada no PostgreSQL.")
+                    self._print_manual_sql(target_db, target_user, target_ts)
+                    return False
 
             # 3. Validação de Banco de Dados
             cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (target_db,))
@@ -59,23 +61,32 @@ class CreateDatabaseStep(StepBase):
 
             # 4. Validação de Ownership, Tablespace e Encoding do Banco
             cur.execute("""
-                SELECT 
-                    pg_catalog.pg_get_userbyid(datdba), 
+                SELECT
+                    pg_catalog.pg_get_userbyid(datdba),
                     spcname,
                     pg_encoding_to_char(encoding)
-                FROM pg_database d 
-                JOIN pg_tablespace t ON d.dattablespace = t.oid 
+                FROM pg_database d
+                JOIN pg_tablespace t ON d.dattablespace = t.oid
                 WHERE datname = %s
             """, (target_db,))
-            owner, ts, encoding = cur.fetchone()
-            
+            owner, actual_ts, encoding = cur.fetchone()
+
             if owner != target_user:
                 print(f"[WARNING] O owner do banco '{target_db}' é '{owner}', mas o config espera '{target_user}'.")
-            
-            if ts != target_ts:
-                print(f"[ERROR] O banco '{target_db}' está na tablespace '{ts}', mas o config espera '{target_ts}'.")
-                self._print_manual_sql(target_db, target_user, target_ts)
-                return False
+
+            # Verifica tablespace: se configurada no config, exige correspondência;
+            # se não configurada, apenas garante que não é uma tablespace de sistema.
+            if target_ts is not None:
+                if actual_ts != target_ts:
+                    print(f"[ERROR] O banco '{target_db}' está na tablespace '{actual_ts}', mas o config espera '{target_ts}'.")
+                    self._print_manual_sql(target_db, target_user, target_ts)
+                    return False
+            else:
+                if actual_ts.lower() in ('pg_default', 'pg_global'):
+                    print(f"[ERROR] O banco '{target_db}' está na tablespace do sistema '{actual_ts}'. Use uma tablespace dedicada.")
+                    self._print_manual_sql(target_db, target_user, None)
+                    return False
+                print(f"[OK] Tablespace do banco: '{actual_ts}'.")
 
             if encoding != 'LATIN1':
                 print(f"[ERROR] O banco '{target_db}' está com encoding '{encoding}', mas a premissa do projeto exige 'LATIN1'.")
@@ -84,7 +95,7 @@ class CreateDatabaseStep(StepBase):
 
             cur.close()
             conn.close()
-            
+
             print(f"[OK] Ambiente PostgreSQL validado com sucesso para '{target_db}' (LATIN1).")
             return True
 
@@ -93,9 +104,9 @@ class CreateDatabaseStep(StepBase):
             return False
 
     def _print_manual_sql(self, db, user, ts):
-        if ts in ('pg_default', 'pg_global', 'DEFAULT'):
+        if ts is None or ts.lower() in ('pg_default', 'pg_global', 'default'):
             ts = f"tbs_{db}"
-        
+
         print("\n" + "="*80)
         print(" ATENÇÃO - PRE-REQUISITOS NÃO ATENDIDOS. SOLICITE AO DBA A EXECUÇÃO DO SCRIPT:")
         print("="*80)

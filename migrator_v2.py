@@ -302,6 +302,7 @@ class FirebirdToPgMigrator:
 
         self.master_db_path = master_db_path
         self.migration_id = migration_id
+        self.reset_state = False  # Inicializa flag de reset
 
         # --log-file: sobrescreve path do log (para execução paralela)
         if override_log_file:
@@ -773,10 +774,10 @@ class FirebirdToPgMigrator:
 
         # Sem PK — usa RDB$DB_KEY
         if saved and saved.last_db_key:
-            sql = f'SELECT * FROM "{tbl}" WHERE RDB$DB_KEY > ? ORDER BY RDB$DB_KEY'
+            sql = f'SELECT T.*, T.RDB$DB_KEY FROM "{tbl}" T WHERE T.RDB$DB_KEY > ? ORDER BY T.RDB$DB_KEY'
             return sql, (saved.last_db_key,)
 
-        return f'SELECT * FROM "{tbl}" ORDER BY RDB$DB_KEY', ()
+        return f'SELECT T.*, T.RDB$DB_KEY FROM "{tbl}" T ORDER BY T.RDB$DB_KEY', ()
 
     # ─── loop principal ─────────────────────────────────────
 
@@ -823,7 +824,8 @@ class FirebirdToPgMigrator:
         saved      = self._state.load_progress()
         is_restart = False
 
-        if saved and saved.status == 'completed' and not self.reset_state:
+        # [CHECK] Se já estiver concluído, encerra ANTES do truncate
+        if saved and (saved.status == 'completed' or saved.status == 'loaded') and not self.reset_state:
             self.log.info(f'  [INFO] Tabela {source} já concluída anteriormente. Pulando.')
             return
 
@@ -973,6 +975,7 @@ def main():
                               work_dir=args.work_dir)
 
     if args.reset:
+        m.reset_state = True  # Ativa flag no objeto migrador
         for tbl_cfg in m._resolve_tables():
             state_db = args.master_db if args.master_db else tbl_cfg['state_db']
             StateManager(state_db, migration_id=args.migration_id, table_name=tbl_cfg['source']).reset()

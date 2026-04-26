@@ -183,13 +183,34 @@ class MigrationDB:
                     "UPDATE steps SET status=?, started_at=? WHERE migration_id=? AND step_number=?",
                     (status, now, migration_id, step_number)
                 )
+            elif details is None:
+                # Preserva details_json existente quando nenhum novo detalhe é fornecido
+                conn.execute(
+                    """UPDATE steps SET status=?, completed_at=?, error_message=?
+                       WHERE migration_id=? AND step_number=?""",
+                    (status, now, error_message, migration_id, step_number)
+                )
             else:
                 conn.execute(
                     """UPDATE steps SET status=?, completed_at=?, error_message=?, details_json=?
                        WHERE migration_id=? AND step_number=?""",
                     (status, now, error_message,
-                     json.dumps(details) if details else None,
+                     json.dumps(details),
                      migration_id, step_number)
+                )
+
+    def set_step_details(self, migration_id: int, step_number: int, details: dict, step_name: str = None):
+        """Atualiza details_json do step. Insere a row se ainda não existir (UPSERT manual)."""
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "UPDATE steps SET details_json=? WHERE migration_id=? AND step_number=?",
+                (json.dumps(details), migration_id, step_number)
+            )
+            if cursor.rowcount == 0:
+                conn.execute(
+                    "INSERT INTO steps (migration_id, step_number, step_name, details_json) "
+                    "VALUES (?, ?, ?, ?)",
+                    (migration_id, step_number, step_name or f'step_{step_number}', json.dumps(details))
                 )
 
     def get_step(self, migration_id: int, step_number: int) -> Optional[dict]:
@@ -273,6 +294,72 @@ class MigrationDB:
             ).fetchall()
         conn.close()
         return [dict(r) for r in rows]
+
+    def reset_tables(self, migration_id: int, category: str = None):
+        """Reseta status e progresso das tabelas (opcionalmente filtrando por categoria)."""
+        with self._conn() as conn:
+            if category:
+                conn.execute(
+                    """UPDATE tables SET 
+                       status='pending', rows_migrated=0, rows_failed=0, current_batch=0, 
+                       started_at=NULL, completed_at=NULL, error_message=NULL
+                       WHERE migration_id=? AND category=?""",
+                    (migration_id, category)
+                )
+            else:
+                conn.execute(
+                    """UPDATE tables SET 
+                       status='pending', rows_migrated=0, rows_failed=0, current_batch=0, 
+                       started_at=NULL, completed_at=NULL, error_message=NULL
+                       WHERE migration_id=?""",
+                    (migration_id,)
+                )
+
+    def reset_table_status(self, migration_id: int, table_name: str) -> Optional[str]:
+        """Reseta status de uma única tabela e retorna sua categoria."""
+        conn = self._read_conn()
+        row = conn.execute(
+            "SELECT category FROM tables WHERE migration_id=? AND (source_table=? OR dest_table=?)",
+            (migration_id, table_name.upper(), table_name.lower())
+        ).fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        category = row['category']
+        with self._conn() as conn:
+            conn.execute(
+                """UPDATE tables SET 
+                   status='pending', rows_migrated=0, rows_failed=0, current_batch=0, 
+                   started_at=NULL, completed_at=NULL, error_message=NULL
+                   WHERE migration_id=? AND (source_table=? OR dest_table=?)""",
+                (migration_id, table_name.upper(), table_name.lower())
+            )
+        return category
+
+    def ignore_table(self, migration_id: int, table_name: str) -> Optional[str]:
+        """Marca uma tabela como concluída manualmente (ignora erro)."""
+        conn = self._read_conn()
+        row = conn.execute(
+            "SELECT category FROM tables WHERE migration_id=? AND (source_table=? OR dest_table=?)",
+            (migration_id, table_name.upper(), table_name.lower())
+        ).fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        category = row['category']
+        with self._conn() as conn:
+            conn.execute(
+                """UPDATE tables SET 
+                   status='completed', 
+                   error_message='MANUAL_IGNORE: Ignorada pelo DBA'
+                   WHERE migration_id=? AND (source_table=? OR dest_table=?)""",
+                (migration_id, table_name.upper(), table_name.lower())
+            )
+        return category
 
     # ── batches ───────────────────────────────────────────────────────────────
 

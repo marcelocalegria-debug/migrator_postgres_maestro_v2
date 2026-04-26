@@ -80,3 +80,33 @@ class StepRunner:
                 import traceback
                 traceback.print_exc()
                 break
+
+    def run_one(self, num: int):
+        """Executa especificamente UM passo, sem disparar a pipeline subsequente."""
+        if num not in self.steps:
+            print(f"Passo {num} não cadastrado na pipeline.")
+            return False
+            
+        step = self.steps[num]
+        print(f"\n>>> [SINGLE RUN] Executando Passo {num}: {step.__class__.__name__}")
+        
+        # Registra início
+        self.db.update_step(self.migration_id, num, 'running')
+        
+        try:
+            success = step.run()
+            if success:
+                self.db.update_step(self.migration_id, num, 'completed')
+                print(f"Passo {num} concluído com sucesso.")
+            else:
+                self.db.update_step(self.migration_id, num, 'failed', error_message="Step returned False")
+                print(f"Passo {num} falhou.")
+            return success
+        except Exception as e:
+            error_msg = f"Erro inesperado: {str(e)}"
+            self.db.update_step(self.migration_id, num, 'failed', error_message=error_msg)
+            step.log_error(error_msg)
+            print(f"Passo {num} falhou com exceção: {error_msg}")
+            import traceback
+            traceback.print_exc()
+            return False

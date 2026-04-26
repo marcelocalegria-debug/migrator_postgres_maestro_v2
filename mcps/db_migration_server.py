@@ -54,7 +54,9 @@ def get_safe_fb_connection():
     config = load_config()['firebird']
     # OBRIGATÓRIO usar usuário de auditoria e ROLE
     user = config.get('audit_user', 'MIGRATION_AUDIT')
-    password = config.get('audit_password', 'migra_audit_123')
+    password = config.get('audit_password')
+    if not password:
+        raise RuntimeError("audit_password ausente em config.yaml — servidor MCP não pode conectar ao Firebird")
     role = config.get('audit_role', 'MIGRATION_AUDIT_ROLE')
     
     return fdb.connect(
@@ -74,7 +76,9 @@ def get_safe_pg_connection():
     
     # OBRIGATÓRIO usar usuário de auditoria
     user = config.get('audit_user', 'migration_audit')
-    password = config.get('audit_password', 'migra_audit_123')
+    password = config.get('audit_password')
+    if not password:
+        raise RuntimeError("audit_password ausente em config.yaml — servidor MCP não pode conectar ao PostgreSQL")
     
     return psycopg2.connect(
         host=config['host'],
@@ -142,18 +146,20 @@ def check_migration_logs(lines: int = 50, filter_error: bool = True) -> str:
 
 @mcp.tool()
 def execute_postgres_sql(sql: str) -> str:
-    """Executa SQL SELECT no Postgres usando conexão segura (ReadOnly)."""
+    """Executa SQL SELECT no Postgres usando conexão segura (ReadOnly) com timeout."""
     if "SELECT" not in sql.upper():
         return "Erro: Apenas comandos SELECT são permitidos por segurança."
     try:
         conn = get_safe_pg_connection()
         cur = conn.cursor()
+        # Define timeout de 30 segundos para a query do agente
+        cur.execute("SET statement_timeout = '30s'")
         cur.execute(sql)
         rows = cur.fetchmany(100)
         conn.close()
-        return str(rows)
+        return f"Resultado (limitado a 100 linhas): {str(rows)}"
     except Exception as e:
-        return f"Erro ao executar SQL no Postgres (ReadOnly): {e}"
+        return f"Erro ao executar SQL no Postgres ({type(e).__name__})"
 
 @mcp.tool()
 def execute_firebird_sql(sql: str) -> str:
@@ -162,13 +168,15 @@ def execute_firebird_sql(sql: str) -> str:
         return "Erro: Apenas comandos SELECT são permitidos por segurança."
     try:
         conn = get_safe_fb_connection()
+        # Firebird não tem um SET statement_timeout global fácil via SQL, 
+        # mas podemos usar a API do fdb se necessário. Por ora, limitamos o fetch.
         cur = conn.cursor()
         cur.execute(sql)
         rows = cur.fetchmany(100)
         conn.close()
-        return str(rows)
+        return f"Resultado (limitado a 100 linhas): {str(rows)}"
     except Exception as e:
-        return f"Erro ao executar SQL no Firebird (ReadOnly): {e}"
+        return f"Erro ao executar SQL no Firebird ({type(e).__name__})"
 
 if __name__ == "__main__":
     mcp.run()

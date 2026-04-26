@@ -116,7 +116,10 @@ _FB_CHARSET_TO_PYTHON: dict = {
     'WIN1252': 'cp1252', 'UTF8': 'utf-8', 'NONE': 'latin-1',
 }
 _CONFIG_CHARSET_TO_FB: dict = {
-    'win1252': 'WIN1252', 'utf-8': 'UTF8',
+    'iso-8859-1': 'ISO8859_1', 'iso8859-1': 'ISO8859_1', 'iso_8859-1': 'ISO8859_1',
+    'latin1': 'ISO8859_1', 'latin-1': 'ISO8859_1',
+    'win1252': 'WIN1252', 'windows-1252': 'WIN1252', 'cp1252': 'WIN1252',
+    'utf-8': 'UTF8', 'utf8': 'UTF8',
 }
 
 def _fb_charset_for_connect(raw: str) -> str:
@@ -253,12 +256,14 @@ class FirebirdToPgMigrator:
         conn = self._pg_conn()
         cur = conn.cursor()
         try:
-            cur.execute(f'TRUNCATE TABLE "{schema}"."{table}" CASCADE')
+            # [SAFETY] Removido CASCADE para evitar limpeza acidental de tabelas relacionadas.
+            # Se houver erro de FK, o usuário deve rodar o pg_constraints.py primeiro.
+            cur.execute(f'TRUNCATE TABLE "{schema}"."{table}"')
             conn.commit()
             self.log.info(f'  [{table_name}] Destino truncado.')
         except Exception as e:
             conn.rollback()
-            self.log.warning(f'  [{table_name}] Falha ao truncar: {e}')
+            self.log.warning(f'  [{table_name}] Falha ao truncar (pode haver FKs ativas): {e}')
         finally:
             cur.close(); conn.close()
 
@@ -332,10 +337,10 @@ class FirebirdToPgMigrator:
             
             # Montagem da query com suporte a restart (RDB$DB_KEY)
             if is_restart and self.progress.last_db_key:
-                sql = f'SELECT * FROM "{source.upper()}" WHERE RDB$DB_KEY > ? ORDER BY RDB$DB_KEY'
+                sql = f'SELECT T.*, T.RDB$DB_KEY FROM "{source.upper()}" T WHERE T.RDB$DB_KEY > ? ORDER BY T.RDB$DB_KEY'
                 params = (self.progress.last_db_key,)
             else:
-                sql = f'SELECT * FROM "{source.upper()}" ORDER BY RDB$DB_KEY'
+                sql = f'SELECT T.*, T.RDB$DB_KEY FROM "{source.upper()}" T ORDER BY T.RDB$DB_KEY'
                 params = ()
                 
             fb_cur.execute(sql, params)

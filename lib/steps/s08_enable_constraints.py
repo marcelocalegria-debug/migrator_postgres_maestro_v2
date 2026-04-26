@@ -56,9 +56,19 @@ class EnableConstraintsStep(StepBase):
                         self.db.update_constraint_status(c['id'], 'enabled')
                         affected_tables.add(c['dest_table'])
                         total_ok += 1
-                        # print(f"  [OK] {c['constraint_name']}")
+                    except psycopg2.Error as e:
+                        # Se o erro for "já existe" (duplicate_object=42710 ou duplicate_table=42P07 para índices)
+                        if e.pgcode in ('42710', '42P07'):
+                            # print(f"  [INFO] {c['constraint_name']} já existe, ignorando.")
+                            self.db.update_constraint_status(c['id'], 'enabled')
+                            affected_tables.add(c['dest_table'])
+                            total_ok += 1
+                        else:
+                            print(f"  [ERROR] Falha ao habilitar {c['constraint_name']} em {c['dest_table']}: {str(e)}")
+                            self.db.update_constraint_status(c['id'], 'failed', error_message=str(e))
+                            total_fail += 1
                     except Exception as e:
-                        print(f"  [ERROR] Falha ao habilitar {c['constraint_name']} em {c['dest_table']}: {str(e)}")
+                        print(f"  [ERROR] Erro inesperado em {c['constraint_name']}: {str(e)}")
                         self.db.update_constraint_status(c['id'], 'failed', error_message=str(e))
                         total_fail += 1
 

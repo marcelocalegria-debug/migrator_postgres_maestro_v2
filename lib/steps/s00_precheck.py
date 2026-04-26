@@ -95,10 +95,22 @@ class PrecheckStep(StepBase):
 
     def _create_firebird_audit_user(self, conn):
         """Cria o usuário MIGRATION_AUDIT e a ROLE de auditoria no Firebird."""
+        import json as _json
+
+        # Flag de idempotência: evita reaplicar grants a cada /check ou /run
+        step_record = self.db.get_step(self.migration_id, self.step_number)
+        if step_record and step_record.get('details_json'):
+            try:
+                if _json.loads(step_record['details_json']).get('firebird_audit_done'):
+                    print("[INFO] Auditoria Firebird já configurada. Pulando.")
+                    return
+            except Exception:
+                pass
+
         user = "MIGRATION_AUDIT"
         password = "migra_audit_123"
         role = "MIGRATION_AUDIT_ROLE"
-        
+
         print(f"Configurando auditoria Firebird (User: {user}, Role: {role})...")
         try:
             cur = conn.cursor()
@@ -134,39 +146,56 @@ class PrecheckStep(StepBase):
                 if "already exists" not in err_msg and "integ" not in err_msg:
                     print(f"[WARNING] Erro ao associar role: {e}")
 
-            # 4. Grant iterativo robusto (Alternativa ao EXECUTE BLOCK que falha no FB3)
-            # Lê as tabelas primeiro
+            # 4. Grant iterativo idempotente (Alternativa ao EXECUTE BLOCK que falha no FB3)
             cur.execute("SELECT TRIM(RDB$RELATION_NAME) FROM RDB$RELATIONS WHERE COALESCE(RDB$SYSTEM_FLAG, 0) = 0 AND RDB$RELATION_TYPE IN (0, 1)")
             tables = [row[0] for row in cur.fetchall()]
-            
-            # Lê tabelas de sistema
+
             cur.execute("SELECT TRIM(RDB$RELATION_NAME) FROM RDB$RELATIONS WHERE RDB$SYSTEM_FLAG = 1 AND RDB$RELATION_NAME STARTING WITH 'RDB$'")
             sys_tables = [row[0] for row in cur.fetchall()]
-            
+
             all_objects = tables + sys_tables
-            print(f"Aplicando privilégios em {len(all_objects)} objetos para a ROLE {role}...")
-            
-            error_count = 0
-            for obj in all_objects:
-                try:
-                    cur.execute(f'GRANT SELECT ON "{obj}" TO ROLE {role}')
-                    conn.commit()
-                except Exception as e:
-                    conn.rollback()
-                    if "already exists" not in str(e).lower() and "integ_5" not in str(e).lower():
-                        error_count += 1
-                    # Fallback for the specific user
-                    try:
-                        cur.execute(f'GRANT SELECT ON "{obj}" TO USER {user}')
-                        conn.commit()
-                    except Exception as fb_err:
-                        conn.rollback()
 
-            if error_count == 0:
-                print(f"[OK] Privilégios de leitura iterativos concedidos.")
+            # Verifica grants já existentes para evitar iterar 900+ objetos desnecessariamente
+            cur.execute(
+                "SELECT TRIM(RDB$RELATION_NAME) FROM RDB$USER_PRIVILEGES "
+                "WHERE TRIM(RDB$USER) = ? AND RDB$PRIVILEGE = 'S'",
+                (role,)
+            )
+            already_granted = {row[0] for row in cur.fetchall()}
+
+            pending = [obj for obj in all_objects if obj not in already_granted]
+
+            if not pending:
+                print(f"[INFO] Privilégios já concedidos a {role} em todos os {len(all_objects)} objetos. Nada a fazer.")
             else:
-                print(f"[WARNING] Privilégios concedidos com {error_count} erros (ignorados).")
+                if already_granted:
+                    print(f"Aplicando privilégios em {len(pending)} objetos pendentes para a ROLE {role} ({len(already_granted)} já existentes)...")
+                else:
+                    print(f"Aplicando privilégios em {len(pending)} objetos para a ROLE {role}...")
 
+                error_count = 0
+                for obj in pending:
+                    try:
+                        cur.execute(f'GRANT SELECT ON "{obj}" TO ROLE {role}')
+                        conn.commit()
+                    except Exception as e:
+                        conn.rollback()
+                        if "already exists" not in str(e).lower() and "integ_5" not in str(e).lower():
+                            error_count += 1
+                        # Fallback for the specific user
+                        try:
+                            cur.execute(f'GRANT SELECT ON "{obj}" TO USER {user}')
+                            conn.commit()
+                        except Exception:
+                            conn.rollback()
+
+                if error_count == 0:
+                    print(f"[OK] Privilégios de leitura concedidos.")
+                else:
+                    print(f"[WARNING] Privilégios concedidos com {error_count} erros (ignorados).")
+
+            # Grava flag de idempotência para não reaplicar em execuções futuras
+            self.db.set_step_details(self.migration_id, self.step_number, {'firebird_audit_done': True}, step_name='PRECHECK')
             cur.close()
         except Exception as e:
             print(f"[WARNING] Erro geral na auditoria FB: {e}")

@@ -80,6 +80,9 @@ class SequencesStep(StepBase):
                     cur_pg.execute(f"DROP SEQUENCE IF EXISTS {seq_name} CASCADE")
                     cur_pg.execute(f"CREATE SEQUENCE {seq_name}")
                     cur_pg.execute(f"SELECT setval(%s, %s, true)", (seq_name, target_val))
+                    result = cur_pg.fetchone()
+                    if result is None or result[0] != target_val:
+                        print(f"  [ERROR] Sequence {seq_name}: setval retornou {result} (esperado {target_val})")
                 except Exception as e:
                     print(f"  [WARNING] Erro na sequence {seq_name}: {str(e)}")
 

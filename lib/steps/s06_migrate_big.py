@@ -6,6 +6,8 @@ from pathlib import Path
 from .base import StepBase
 
 WORKER_TIMEOUT_SECS = 86400  # 24 horas por worker (tabelas gigantes podem demorar)
+# MigrateBigStep roda small tables internamente; este índice evita que MigrateSmallStep duplique a carga
+STEP_IDX_MIGRATE_SMALL = 6
 
 class MigrateBigStep(StepBase):
     """Migra todas as 10 tabelas grandes em paralelo usando migradores especializados ou v2."""
@@ -147,7 +149,7 @@ class MigrateBigStep(StepBase):
             # [PLANO B] Marca automaticamente o Passo 6 (MigrateSmallStep) como concluído
             # para evitar que o Maestro tente rodar novamente de forma redundante.
             try:
-                self.db.update_step(self.migration_id, 6, 'completed')
+                self.db.update_step(self.migration_id, STEP_IDX_MIGRATE_SMALL, 'completed')
                 print("  [INFO] Passo 6 (MigrateSmallStep) sincronizado como concluído.")
             except Exception as e:
                 print(f"  [WARN] Não foi possível sincronizar o status do Passo 6: {e}")

@@ -58,6 +58,15 @@ if os.name == "nt":
 
 import psycopg2
 
+_SQL_OUTPUT = []
+
+def register_sql(table: str, cmd: str, is_comment: bool = False):
+    if is_comment:
+        _SQL_OUTPUT.append(f'-- [TABELA: {table}] {cmd}')
+    else:
+        _SQL_OUTPUT.append(cmd)
+
+
 # ─── Charset helpers ──────────────────────────────────────────────────────────
 _CONFIG_CHARSET_TO_FB = {
     'iso-8859-1': 'ISO8859_1', 'iso8859-1': 'ISO8859_1',
@@ -164,6 +173,101 @@ def _pg_count(conn, schema: str, table: str) -> int:
     cur.execute(f'SELECT COUNT(*) FROM "{schema}"."{table}"')
     return cur.fetchone()[0]
 
+
+
+# ─── COLUNAS ──────────────────────────────────────────────────────────────────
+
+def normalize_fb_type(f_type, f_sub_type, char_len, f_length, f_prec, f_scale):
+    if f_type in (7, 8, 16) and f_sub_type in (1, 2):
+        scale = -f_scale if f_scale and f_scale < 0 else 0
+        prec = f_prec if f_prec else 0
+        return f"numeric({prec},{scale})"
+    elif f_type == 7: return "smallint"
+    elif f_type == 8: return "integer"
+    elif f_type == 16: return "bigint"
+    elif f_type == 10: return "real"
+    elif f_type == 27: return "double precision"
+    elif f_type == 12: return "date"
+    elif f_type == 13: return "time without time zone"
+    elif f_type == 35: return "timestamp without time zone"
+    elif f_type == 14: return f"character({char_len or f_length})"
+    elif f_type == 37: return f"character varying({char_len or f_length})"
+    elif f_type == 261:
+        if f_sub_type == 1: return "text"
+        else: return "bytea"
+    elif f_type == 23: return "boolean"
+    return f"unknown_{f_type}"
+
+def normalize_pg_type(data_type, char_len, num_prec, num_scale):
+    dt = (data_type or '').lower()
+    if dt == 'decimal': dt = 'numeric'
+    if dt in ('character varying', 'character'):
+        if char_len:
+            return f"{dt}({char_len})"
+        return dt
+    if dt == 'numeric':
+        if num_prec is not None and num_scale is not None:
+            return f"{dt}({num_prec},{num_scale})"
+        elif num_prec is not None:
+            return f"{dt}({num_prec},0)"
+        return dt
+    if dt == 'timestamp with time zone': return 'timestamp with time zone'
+    if dt == 'time with time zone': return 'time with time zone'
+    if dt == 'int4': return 'integer'
+    if dt == 'int8': return 'bigint'
+    if dt == 'int2': return 'smallint'
+    if dt == 'float4': return 'real'
+    if dt == 'float8': return 'double precision'
+    if dt == 'bpchar': return 'character'
+    return dt
+
+def _fb_get_columns(conn, table: str) -> dict:
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+            TRIM(r.RDB$FIELD_NAME) AS col_name,
+            f.RDB$FIELD_TYPE AS f_type,
+            f.RDB$FIELD_SUB_TYPE AS f_sub_type,
+            f.RDB$FIELD_LENGTH AS f_length,
+            f.RDB$CHARACTER_LENGTH AS char_len,
+            f.RDB$FIELD_PRECISION AS f_precision,
+            f.RDB$FIELD_SCALE AS f_scale,
+            r.RDB$NULL_FLAG AS null_flag
+        FROM RDB$RELATION_FIELDS r
+        JOIN RDB$FIELDS f ON r.RDB$FIELD_SOURCE = f.RDB$FIELD_NAME
+        WHERE TRIM(r.RDB$RELATION_NAME) = ?
+        ORDER BY r.RDB$FIELD_POSITION
+    """, (table,))
+    
+    cols = {}
+    for row in cur.fetchall():
+        col_name, f_type, f_sub_type, f_length, char_len, f_prec, f_scale, null_flag = row
+        is_not_null = (null_flag == 1)
+        norm_type = normalize_fb_type(f_type, f_sub_type, char_len, f_length, f_prec, f_scale)
+        cols[col_name.lower()] = {
+            'type': norm_type,
+            'not_null': is_not_null
+        }
+    return cols
+
+def _pg_get_columns(conn, schema: str, table: str) -> dict:
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT column_name, data_type, character_maximum_length, numeric_precision, numeric_scale, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = %s AND table_name = %s
+    """, (schema, table))
+    
+    cols = {}
+    for row in cur.fetchall():
+        col_name, data_type, char_len, num_prec, num_scale, is_nullable = row
+        is_not_null = (is_nullable == 'NO')
+        norm_type = normalize_pg_type(data_type, char_len, num_prec, num_scale)
+        cols[col_name.lower()] = {
+            'type': norm_type,
+            'not_null': is_not_null
+        }
+    return cols
 
 # ─── PRIMARY KEYS ─────────────────────────────────────────────────────────────
 
@@ -601,6 +705,7 @@ def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str,
     result = {
         'table': table_key,
         'count_ok': True,
+        'cols_ok': True,
         'pk_ok': True,
         'fk_ok': True,
         'idx_ok': True,
@@ -622,6 +727,59 @@ def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str,
             result['count_ok'] = False
             result['issues'].append(f"COUNT: ERRO - {e}")
     
+    # ─── Colunas ──────────────────────────────────────────────────────
+    try:
+        fb_cols = _fb_get_columns(fb_conn, fb_name.upper())
+        pg_cols = _pg_get_columns(pg_conn, schema, pg_name)
+        
+        fb_col_names = set(fb_cols.keys())
+        pg_col_names = set(pg_cols.keys())
+        
+        missing_in_pg = fb_col_names - pg_col_names
+        extra_in_pg = pg_col_names - fb_col_names
+        
+        if missing_in_pg or extra_in_pg:
+            result['cols_ok'] = False
+            if missing_in_pg:
+                result['issues'].append(f"Colunas FALTANDO no PG: {missing_in_pg}")
+                for c in missing_in_pg:
+                    ctype = fb_cols[c]['type']
+                    cnotnull = " NOT NULL" if fb_cols[c]['not_null'] else ""
+                    register_sql(pg_name, f"Coluna '{c}' faltando no PostgreSQL", True)
+                    register_sql(pg_name, f"ALTER TABLE {schema}.{pg_name} ADD COLUMN {c} {ctype}{cnotnull};")
+            if extra_in_pg:
+                result['issues'].append(f"Colunas EXTRAS no PG (não existem no FB): {extra_in_pg}")
+                for c in extra_in_pg:
+                    register_sql(pg_name, f"Coluna '{c}' existe apenas no PostgreSQL", True)
+                    register_sql(pg_name, f"-- ALTER TABLE {schema}.{pg_name} DROP COLUMN {c};")
+                    
+        common_cols = fb_col_names & pg_col_names
+        for c in common_cols:
+            fb_c = fb_cols[c]
+            pg_c = pg_cols[c]
+            diffs = []
+            
+            if fb_c['type'] != pg_c['type']:
+                diffs.append(f"Tipo FB={fb_c['type']} PG={pg_c['type']}")
+                register_sql(pg_name, f"Divergência de tipo na coluna '{c}': FB={fb_c['type']} vs PG={pg_c['type']}", True)
+                register_sql(pg_name, f"ALTER TABLE {schema}.{pg_name} ALTER COLUMN {c} TYPE {fb_c['type']} USING {c}::{fb_c['type']};")
+            
+            if fb_c['not_null'] != pg_c['not_null']:
+                diffs.append(f"NOT NULL FB={fb_c['not_null']} PG={pg_c['not_null']}")
+                register_sql(pg_name, f"Divergência de NOT NULL na coluna '{c}': FB={fb_c['not_null']} vs PG={pg_c['not_null']}", True)
+                if fb_c['not_null']:
+                    register_sql(pg_name, f"ALTER TABLE {schema}.{pg_name} ALTER COLUMN {c} SET NOT NULL;")
+                else:
+                    register_sql(pg_name, f"ALTER TABLE {schema}.{pg_name} ALTER COLUMN {c} DROP NOT NULL;")
+            
+            if diffs:
+                result['cols_ok'] = False
+                result['issues'].append(f"Coluna '{c}' difere: {', '.join(diffs)}")
+
+    except Exception as e:
+        result['cols_ok'] = False
+        result['issues'].append(f"COLS: ERRO - {e}")
+        
     # ─── Primary Key ──────────────────────────────────────────────────
     try:
         fb_pk = _fb_get_pk(fb_conn, fb_name.upper())
@@ -632,6 +790,9 @@ def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str,
             fb_cols = ','.join(sorted(fb_pk)) if fb_pk else 'NONE'
             pg_cols = ','.join(sorted(pg_pk)) if pg_pk else 'NONE'
             result['issues'].append(f"PK: FB=[{fb_cols}] vs PG=[{pg_cols}]")
+            register_sql(pg_name, f"PK difere: FB=[{fb_cols}] vs PG=[{pg_cols}]", True)
+            if not pg_pk:
+                register_sql(pg_name, f"-- ALTER TABLE {schema}.{pg_name} ADD PRIMARY KEY ({fb_cols});")
     except Exception as e:
         result['pk_ok'] = False
         result['issues'].append(f"PK: ERRO - {e}")
@@ -648,8 +809,12 @@ def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str,
 
             if only_fb:
                 result['issues'].append(f"FK só no FB: {only_fb}")
+                for fk in only_fb:
+                    register_sql(pg_name, f"FK faltando no PG: origem={fk[0]}, destino={fk[1]}({fk[2]})", True)
             if only_pg:
                 result['issues'].append(f"FK só no PG: {only_pg}")
+                for fk in only_pg:
+                    register_sql(pg_name, f"FK extra no PG: origem={fk[0]}, destino={fk[1]}({fk[2]})", True)
     except Exception as e:
         result['fk_ok'] = False
         result['issues'].append(f"FK: ERRO - {e}")
@@ -683,8 +848,15 @@ def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str,
             
             if only_fb:
                 result['issues'].append(f"IDX só no FB: {only_fb}")
+                for idx in only_fb:
+                    register_sql(pg_name, f"Índice faltando no PG: colunas={idx[0]}, unique={idx[1]}", True)
+                    unique_str = "UNIQUE " if idx[1] else ""
+                    idx_name = f"idx_{pg_name}_{idx[0].replace(',','_')}"[:63]
+                    register_sql(pg_name, f"-- CREATE {unique_str}INDEX {idx_name} ON {schema}.{pg_name} ({idx[0]});")
             if only_pg:
                 result['issues'].append(f"IDX só no PG: {only_pg}")
+                for idx in only_pg:
+                    register_sql(pg_name, f"Índice extra no PG: colunas={idx[0]}", True)
     except Exception as e:
         result['idx_ok'] = False
         result['issues'].append(f"IDX: ERRO - {e}")
@@ -756,7 +928,7 @@ def _print_summary_plain(results: List[dict], only_fb: List[str], only_pg: List[
     
     total = len(results)
     perfect = sum(1 for r in results if all([
-        r['count_ok'], r['pk_ok'], r['fk_ok'], r['idx_ok'], r['uniq_ok'], r['check_ok']
+        r['count_ok'], r['cols_ok'], r['pk_ok'], r['fk_ok'], r['idx_ok'], r['uniq_ok'], r['check_ok']
     ]))
 
     issues = [r for r in results if r['issues']]
@@ -790,6 +962,7 @@ def _print_summary_plain(results: List[dict], only_fb: List[str], only_pg: List[
         for r in issues:
             status_icons = []
             if not r['count_ok']:  status_icons.append('COUNT')
+            if not r['cols_ok']:   status_icons.append('COLS')
             if not r['pk_ok']:     status_icons.append('PK')
             if not r['fk_ok']:     status_icons.append('FK')
             if not r['idx_ok']:    status_icons.append('IDX')
@@ -807,7 +980,7 @@ def _print_summary_rich(results: List[dict], only_fb: List[str], only_pg: List[s
     """Relatório resumido com Rich."""
     total = len(results)
     perfect = sum(1 for r in results if all([
-        r['count_ok'], r['pk_ok'], r['fk_ok'], r['idx_ok'], r['uniq_ok'], r['check_ok']
+        r['count_ok'], r['cols_ok'], r['pk_ok'], r['fk_ok'], r['idx_ok'], r['uniq_ok'], r['check_ok']
     ]))
 
     issues = [r for r in results if r['issues']]
@@ -844,6 +1017,7 @@ def _print_summary_rich(results: List[dict], only_fb: List[str], only_pg: List[s
         for r in issues:
             status = []
             if not r['count_ok']:  status.append('[red]COUNT[/]')
+            if not r['cols_ok']:   status.append('[red]COLS[/]')
             if not r['pk_ok']:     status.append('[yellow]PK[/]')
             if not r['fk_ok']:     status.append('[yellow]FK[/]')
             if not r['idx_ok']:    status.append('[yellow]IDX[/]')
@@ -950,7 +1124,18 @@ def main():
     if pg_conn:
         pg_conn.close()
 
+
     print('\nGerando relatório...')
+    
+    sql_script_path = log_dir / 'correcoes_estrutura_pg.sql'
+    if _SQL_OUTPUT:
+        with open(sql_script_path, 'w', encoding='utf-8') as f_sql:
+            f_sql.write("-- SCRIPT DE CORREÇÕES GERADO AUTOMATICAMENTE\n")
+            f_sql.write("-- Analise cada comando antes de executar no PostgreSQL\n\n")
+            for statement in _SQL_OUTPUT:
+                f_sql.write(statement + "\n")
+        print(f"\n[!] Script SQL com sugestões de correção gerado em: {sql_script_path}")
+
     
     if HAS_RICH:
         _print_summary_rich(results, only_fb, only_pg)
