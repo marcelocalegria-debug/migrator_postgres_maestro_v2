@@ -8,6 +8,7 @@ from typing import List, Optional
 from datetime import datetime
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.shortcuts import CompleteStyle
 from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.panel import Panel
@@ -47,7 +48,11 @@ class MaestroCLI:
             "/monitor", "/run", "/rerun", "/rerun-only", "/reset-table", "/ignore", "/agent", "/help", "/quit"
         ]
         self.completer = WordCompleter(self.commands)
-        self.session = PromptSession(completer=self.completer)
+        self.session = PromptSession(
+            completer=self.completer, 
+            complete_style=CompleteStyle.MULTI_COLUMN,
+            reserve_space_for_menu=8
+        )
         
         self.style = Style.from_dict({
             'prompt': '#ansigreen bold',
