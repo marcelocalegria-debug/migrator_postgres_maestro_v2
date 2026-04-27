@@ -122,7 +122,7 @@ ALTER USER c6_producao_user with superuser;
 
 -- teste conexao
 psql -h localhost -p 5432 -U "c6_producao_user" -d c6_producao -W
-5tEkZZwRydTUXarJ
+**************
 
 
 
@@ -188,7 +188,7 @@ EXIT;
 -- c6_producao_pg_converter_equinix.sql
 
 psql -h localhost -U c6_producao_user -W -d c6_producao -f c6_producao_pg_converter_equinix.sql  | tee -a /migracao_firebird/c6_producao_pg_converter_equinix.log
-5tEkZZwRydTUXarJ
+**************
 
 ----------------------------------------------------------------------------------------------------------
 4- Liga o monitor - 19:10
@@ -553,7 +553,7 @@ python migrator_log_eventos_v2.py
  ----------------------------------------------------------------------------------------------------------
   7.3 - Ajsutes diferenças FKs , PKs e indices
  ----------------------------------------------------------------------------------------------------------
- 5tEkZZwRydTUXarJ
+ **************
 
  psql -h localhost -p 5432 -U "c6_producao_user" -d c6_producao -W < /migracao_firebird/tabelas_10_so_constraints_fk.sql  | tee -a /migracao_firebird/tabelas_10_so_constraints_fk.log
 
