@@ -90,8 +90,33 @@ class ComparePreStep(StepBase):
                 return None
 
             if proc.returncode == 1:
-                print("\n[OK] Schemas idênticos — nenhuma diferença encontrada!")
-                return 'continue'
+                # gera_ddl_correcao_schema.py verifica apenas FK/índices.
+                # Executar recheck completo (inclui colunas) antes de confirmar schemas idênticos.
+                print("\n[INFO] Sem diferenças de FK/índices. Verificando colunas com comparação completa...")
+                _rck = subprocess.Popen(
+                    cmd_recheck, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1, encoding='utf-8', errors='replace'
+                )
+                if _rck.stdout:
+                    for _ln in _rck.stdout:
+                        print(_ln, end='', flush=True)
+                _rck.wait()
+                if _rck.returncode == 0:
+                    print("\n[OK] Schemas idênticos — nenhuma diferença encontrada!")
+                    return 'continue'
+                # Ainda há diferenças (provavelmente colunas faltando no PG)
+                print("\n[WARNING] Ainda há diferenças na estrutura (colunas). Aplique o script abaixo antes de continuar.")
+                _col_sql = mig_dir / "logs" / "correcoes_colunas_pg.sql"
+                _pg = self.config.postgres
+                if _col_sql.exists():
+                    print(f"\n{'=' * 62}")
+                    print(f"  COLUNAS FALTANDO: {_col_sql}")
+                    print(f"{'=' * 62}")
+                    print("  Execute no PostgreSQL (em outra sessão):")
+                    print(f"  psql -h {_pg.get('host')} -p {_pg.get('port', 5432)} "
+                          f"-U {_pg.get('user')} -d {_pg.get('database')} -f \"{_col_sql}\"")
+                # Maestro não aplica scripts automaticamente — usuário aplica em outra sessão
+                # e volta aqui. Fall-through para o prompt ENTER=recheck abaixo.
 
             if proc.returncode == 2:
                 print("\n[INFO] Apenas diferenças manuais (sem DDL automático gerado). Revise os comentários no arquivo DDL.")
@@ -107,7 +132,24 @@ class ComparePreStep(StepBase):
                 print("\nExecute em um novo terminal:")
                 print(f"  psql -h {pg.get('host')} -p {pg.get('port', 5432)} "
                       f"-U {pg.get('user')} -d {pg.get('database')} -f \"{ddl_path}\"")
-                print("\nApós aplicar o DDL, volte aqui e:")
+
+                # Exibir também o script de colunas faltando, se existir com comandos executáveis
+                col_sql_path = mig_dir / "logs" / "correcoes_colunas_pg.sql"
+                if col_sql_path.exists():
+                    with open(col_sql_path, encoding='utf-8') as _f:
+                        _has_exec = any(
+                            ln.strip() and not ln.strip().startswith('--')
+                            for ln in _f
+                        )
+                    if _has_exec:
+                        print(f"\n{'=' * 62}")
+                        print(f"  COLUNAS FALTANDO: {col_sql_path}")
+                        print(f"{'=' * 62}")
+                        print("  Aplique TAMBÉM este script (ADD COLUMN):")
+                        print(f"  psql -h {pg.get('host')} -p {pg.get('port', 5432)} "
+                              f"-U {pg.get('user')} -d {pg.get('database')} -f \"{col_sql_path}\"")
+
+                print("\nApós aplicar os scripts, volte aqui e:")
 
             resp = input("\n  ENTER = recheck  |  'pular' = continuar sem recheck  |  'sair' = bloquear pipeline\n>> ").strip().lower()
 
@@ -196,9 +238,9 @@ class ComparePreStep(StepBase):
                 print("[WARNING] Diferenças encontradas na estrutura.")
 
                 print("\nO que deseja fazer?")
-                print("  [1] Gerar DDL de correção automática (recomendado)")
-                print("  [2] Analisar com Agente ADK (IA)")
-                print("  [3] Continuar mesmo assim")
+                print("  [1] Se você já aplicou o script de colunas gerado acima, fazer nova comparação e gerar DDL das diferenças estruturais (recomendado)")
+                print("  [2] Analisar as diferenças com o Agente ADK (IA) para receber sugestões de correção")
+                print("  [3] Continuar com a migração")
                 print("  [4] Sair (corrigir manualmente e usar /rerun 3)")
                 opcao = input("\nEscolha [1/2/3/4] (default=1): ").strip() or "1"
 

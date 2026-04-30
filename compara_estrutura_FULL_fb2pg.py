@@ -1,7 +1,7 @@
 """
-compara_estrutura_fb2pg.py
+compara_estrutura_FULL_fb2pg.py
 ===========================
-Compara estrutura completa (contagem + PKs + FKs + índices + constraints) 
+Compara estrutura completa (contagem + PKs + FKs + índices + constraints) e colunas + tipos de conversão padrao 
 entre Firebird e PostgreSQL.
 
 Relatório detalhado:
@@ -410,6 +410,11 @@ _PG_CONFTYPE: Dict[str, str] = {
 }
 
 
+def _norm_fk_rule(rule: str) -> str:
+    # RESTRICT = NO ACTION para constraints não-DEFERRABLE (Firebird não suporta DEFERRABLE)
+    return 'NO ACTION' if rule == 'RESTRICT' else rule
+
+
 def _pg_get_fk_rules(conn, schema: str, table: str) -> Dict[Tuple, Tuple[str, str]]:
     """Retorna {(col_origem, tab_destino, col_destino): (del_rule, upd_rule)} para o PostgreSQL."""
     cur = conn.cursor()
@@ -760,10 +765,11 @@ def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str,
             diffs = []
             
             if fb_c['type'] != pg_c['type']:
-                diffs.append(f"Tipo FB={fb_c['type']} PG={pg_c['type']}")
-                register_sql(pg_name, f"Divergência de tipo na coluna '{c}': FB={fb_c['type']} vs PG={pg_c['type']}", True)
-                register_sql(pg_name, f"ALTER TABLE {schema}.{pg_name} ALTER COLUMN {c} TYPE {fb_c['type']} USING {c}::{fb_c['type']};")
-            
+                result['issues'].append(
+                    f"[WARNING-TIPO] Coluna '{c}': FB={fb_c['type']} vs PG={pg_c['type']} (compatível — sem ação)"
+                )
+                # Diferença de tipo FB→PG é esperada na conversão — nunca gerar ALTER COLUMN TYPE
+
             if fb_c['not_null'] != pg_c['not_null']:
                 diffs.append(f"NOT NULL FB={fb_c['not_null']} PG={pg_c['not_null']}")
                 register_sql(pg_name, f"Divergência de NOT NULL na coluna '{c}': FB={fb_c['not_null']} vs PG={pg_c['not_null']}", True)
@@ -827,7 +833,7 @@ def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str,
             if key in pg_fk_rules:
                 fb_del, fb_upd = fb_fk_rules[key]
                 pg_del, pg_upd = pg_fk_rules[key]
-                if fb_del != pg_del or fb_upd != pg_upd:
+                if _norm_fk_rule(fb_del) != _norm_fk_rule(pg_del) or _norm_fk_rule(fb_upd) != _norm_fk_rule(pg_upd):
                     result['fk_ok'] = False
                     result['issues'].append(
                         f"FK-RULES {key}: "
@@ -1142,8 +1148,12 @@ def main():
     else:
         _print_summary_plain(results, only_fb, only_pg)
 
-    # Código de saída: 0 = tudo ok, 1 = há diferenças
-    has_issues = any(r['issues'] for r in results) or only_fb or only_pg
+    # Código de saída: 0 = tudo ok, 1 = há diferenças bloqueantes
+    # [WARNING-TIPO] são informativos — não bloqueiam o pipeline
+    def _has_blocking_issues(r):
+        return any(not i.startswith('[WARNING') for i in r['issues'])
+
+    has_issues = any(_has_blocking_issues(r) for r in results) or only_fb or only_pg
     sys.exit(1 if has_issues else 0)
 
 

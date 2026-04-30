@@ -14,10 +14,14 @@ OLD/
 .claude/
 .vscode/
 fb/
+LEMBRETES.txt
+__OLD/
+logs/
 # Virtual environments
 .venv
 .env
 config.yaml
+config.yaml.C6_EQUINIX
 *.json
 *.DOCKER
 *.html

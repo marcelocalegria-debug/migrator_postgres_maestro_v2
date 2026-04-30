@@ -186,8 +186,7 @@ def _convert_blob(val, blob_subtype: int, charset: str):
             text = val
         else:
             text = str(val)
-        text = text.replace('\x00', '')
-        return text.encode('utf-8', errors='replace')
+        return text.replace('\x00', '') if '\x00' in text else text
     if isinstance(val, str):
         return val.encode('latin-1', errors='replace')
     return val
@@ -198,7 +197,7 @@ def _copy_escape(val) -> str:
         return r'\N'
     if isinstance(val, (bytes, memoryview, bytearray)):
         b = bytes(val) if not isinstance(val, bytes) else val
-        return r'\x' + b.hex()
+        return '\\\\x' + b.hex()
     if isinstance(val, bool):
         return 't' if val else 'f'
     if hasattr(val, 'isoformat'):
@@ -267,9 +266,14 @@ def discover_columns(config: dict) -> List[ColumnMeta]:
         for row in cur:
             name = row[0].strip()
             pg_type, is_blob = map_fb_to_pg(row[1], row[2], row[3], row[4], row[5])
+            blob_subtype = row[2]
+            if is_blob and name.upper() in ('DADO', 'TE_IMAGEM_REDUZIDA', 'IMAGEM'):
+                is_blob = True
+                blob_subtype = 0
+                pg_type = 'BYTEA'
             cols.append(ColumnMeta(
                 name=name, fb_type_code=row[1], pg_type=pg_type,
-                is_blob=is_blob, blob_subtype=row[2],
+                is_blob=is_blob, blob_subtype=blob_subtype,
                 fb_charset=row[8].strip(), nullable=row[6] is None,
                 position=row[7]))
     finally:

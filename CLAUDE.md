@@ -174,6 +174,7 @@ MODEL=...          # LiteLLM model string, e.g. anthropic/claude-sonnet-4-5
 - **WIN1252 → UTF-8** charset conversion for BLOB SUB_TYPE TEXT
 - Fields `DADO`, `TE_IMAGEM_REDUZIDA`, `IMAGEM` forced to BYTEA regardless of declared subtype
 - PostgreSQL session optimizations during load: `synchronous_commit=off`, `jit=off`, `autovacuum_enabled=false`
+- **Schema correction SQL**: Nunca gerar `ALTER COLUMN TYPE` no script de correção de schema. Diferenças de tipo entre Firebird e PostgreSQL (ex: `real` vs `double precision`, `date` vs `timestamp without time zone`, `varchar(1)` vs `char(1)`) são resultado esperado da conversão FB→PG e devem ser reportadas apenas como `[WARNING-TIPO]` no relatório — sem nenhum SQL corretivo gerado.
 
 ## Generated Files
 

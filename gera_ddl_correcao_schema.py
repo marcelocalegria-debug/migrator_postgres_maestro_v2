@@ -59,6 +59,11 @@ _PG_CONFTYPE: Dict[str, str] = {
 }
 
 
+def _norm_fk_rule(rule: str) -> str:
+    # RESTRICT = NO ACTION para constraints não-DEFERRABLE (Firebird não suporta DEFERRABLE)
+    return 'NO ACTION' if rule == 'RESTRICT' else rule
+
+
 # ─── Conexões ─────────────────────────────────────────────────────────────────
 
 def _fb_connect(cfg: dict):
@@ -333,7 +338,8 @@ def generate_ddl(cfg: dict, work_dir: Path, schema: str) -> int:
             for sig in set(fb_sig_map) & set(pg_sig_map):
                 _, fb_info = fb_sig_map[sig]
                 pg_conname, pg_info = pg_sig_map[sig]
-                if fb_info['del_rule'] != pg_info['del_rule'] or fb_info['upd_rule'] != pg_info['upd_rule']:
+                if _norm_fk_rule(fb_info['del_rule']) != _norm_fk_rule(pg_info['del_rule']) or \
+                   _norm_fk_rule(fb_info['upd_rule']) != _norm_fk_rule(pg_info['upd_rule']):
                     corrected = {**pg_info, 'del_rule': fb_info['del_rule'], 'upd_rule': fb_info['upd_rule']}
                     auto_stmts.append(
                         f"-- [FK-RULES] {pg_name}.{pg_conname}: "

@@ -23,4 +23,8 @@ update tipo_tramitacao_fcvs set NO_DESCRICAO = 'CONTRATOS COM TÉRMINO ANÁLISE 
 update tipo_tramitacao_fcvs set NO_DESCRICAO = 'CONTRATOS COM TÉRMINO DE ANÁLISE - CONSOLIDADO (eventual)' where co_tipo_tramitacao_fcvs = '59';
 update tipo_tramitacao_fcvs set NO_DESCRICAO = 'CONTRATOS EXISTENTES NO CADMUT - AGUARDANDO ACERTO' where co_tipo_tramitacao_fcvs = '73';
 update tipo_tramitacao_fcvs set NO_DESCRICAO = 'ANALÍTICO DO TESOURO (CONTRATOS COM SALDO VAF3 E VAF4 P/ NOVAÇÃO - VALORES POS. EM 01/01/1997' where co_tipo_tramitacao_fcvs = '92';
+
+-- tirar a coluna in_reside_no_imovel do pessoa_pretendente (drop) nao foi feito pelo cria e está incorreto na base
+
+
 commit;

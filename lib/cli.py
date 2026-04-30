@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import asyncio
 import shutil
@@ -187,6 +188,71 @@ class MaestroCLI:
         table.add_row("/quit", "Encerra o Maestro com segurança")
         self.console.print(table)
 
+    def _show_config_preview(self, config_path: Path):
+        """Exibe as primeiras 17 linhas do config.yaml com o caminho completo."""
+        try:
+            lines = config_path.read_text(encoding='utf-8').splitlines()
+            masked = [
+                re.sub(r'(password\s*:\s*).*', r'\1***', ln, flags=re.IGNORECASE)
+                for ln in lines
+            ]
+            preview = '\n'.join(masked[:17])
+            self.console.print(f"\n[bold cyan]Config: {config_path.absolute()}[/bold cyan]")
+            self.console.print(Panel(preview, title=f"[dim]{config_path.name} (primeiras 17 linhas)[/dim]", border_style="dim"))
+            self.console.print("[dim]Edite o arquivo acima se necessário antes de continuar.[/dim]\n")
+        except Exception as e:
+            self.console.print(f"[yellow]Não foi possível ler o config: {e}[/yellow]")
+
+    def _query_versao_inst(self, config_path: Path) -> bool:
+        """Consulta as 6 últimas versões no Firebird e pede confirmação ao usuário."""
+        try:
+            import fdb
+            cfg = MigrationConfig(config_path)
+            fb = cfg.firebird
+
+            if os.name == 'nt':
+                fb_dll = os.path.abspath("fbclient.dll")
+                if os.path.exists(fb_dll):
+                    try:
+                        fdb.load_api(fb_dll)
+                    except:
+                        pass
+
+            charset = fb.get('charset', 'UTF8').upper()
+            _charset_map = {
+                'ISO-8859-1': 'ISO8859_1', 'ISO8859-1': 'ISO8859_1',
+                'LATIN-1': 'LATIN1', 'ISO-8859-15': 'ISO8859_15',
+            }
+            charset = _charset_map.get(charset, charset)
+
+            conn = fdb.connect(
+                host=fb['host'],
+                port=fb.get('port', 3050),
+                database=fb['database'],
+                user=fb['user'],
+                password=fb['password'],
+                charset=charset,
+            )
+            cur = conn.cursor()
+            cur.execute("SELECT FIRST 6 * FROM versao_inst ORDER BY nu_versao DESC")
+            rows = cur.fetchall()
+            cols = [desc[0] for desc in cur.description]
+            cur.close()
+            conn.close()
+
+            tbl = Table(title="versao_inst — últimas 6 versões", style="cyan")
+            for col in cols:
+                tbl.add_column(col, overflow="fold")
+            for row in rows:
+                tbl.add_row(*[str(v) if v is not None else "" for v in row])
+            self.console.print(tbl)
+
+        except Exception as e:
+            self.console.print(f"[yellow]Aviso: não foi possível consultar versao_inst: {e}[/yellow]")
+
+        confirm = self.session.prompt("Versão do sistema/banco está correta? (s/N): ").strip().lower()
+        return confirm == 's'
+
     def do_check(self):
         if not self.current_seq:
             self.console.print("[yellow]Nenhuma migração ativa. Use /init ou /resume primeiro.[/yellow]")
@@ -194,6 +260,13 @@ class MaestroCLI:
 
         mig_info = self.db.get_migration_by_seq(self.current_seq)
         mig_dir = self.project.get_migration_dir(self.current_seq)
+
+        self._show_config_preview(mig_dir / "config.yaml")
+
+        resp = self.session.prompt("Continuar ou sair para ajustar o config.yaml? (s/N): ").strip().lower()
+        if resp != 's':
+            self.console.print("[yellow]Retorne após realizar os ajustes no config.yaml.[/yellow]")
+            return
 
         # Se ajusta_base_firebird.sql não existe, oferece copiar um .sql da raiz antes do precheck
         adjust_path = mig_dir / "ajusta_base_firebird.sql"
@@ -228,6 +301,10 @@ class MaestroCLI:
         if precheck.run():
             self.console.print("[bold green][OK] Conectividade e pré-requisitos validados.[/bold green]")
 
+            if not self._query_versao_inst(mig_dir / "config.yaml"):
+                self.console.print("[yellow]Operação cancelada pelo usuário.[/yellow]")
+                return
+
             # Execução do ajusta_base_firebird.sql (Human-in-the-loop)
             
             if adjust_path.exists():
@@ -256,6 +333,12 @@ class MaestroCLI:
             if confirm_comp == 's':
                 compare = ComparePreStep(mig_info['id'], self.db, self.config, 3)
                 compare.run()
+                resp = self.session.prompt(
+                    "\nPressione ENTER para continuar ou 'sair' para retornar e ajustar o config.yaml: "
+                ).strip().lower()
+                if resp == 'sair':
+                    self.console.print("[yellow]Retorne ao Maestro após realizar os ajustes no config.yaml.[/yellow]")
+                    return
             else:
                 self.console.print("[yellow]Comparação de estrutura ignorada pelo usuário.[/yellow]")
         else:
@@ -428,22 +511,65 @@ class MaestroCLI:
         except:
             return None
 
+    def _check_db_empty(self, config_path: Path, db_name: str) -> bool:
+        """Verifica se o banco de destino está vazio (sem tabelas de usuário)."""
+        try:
+            cfg = MigrationConfig(config_path)
+            pg = cfg.postgres
+            conn = psycopg2.connect(
+                host=pg['host'], 
+                port=pg.get('port', 5432),
+                database=db_name,
+                user=pg['user'], 
+                password=pg['password']
+            )
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT count(*) 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+            """)
+            count = cur.fetchone()[0]
+            cur.close()
+            conn.close()
+            return count == 0
+        except Exception as e:
+            # Em caso de falha de conexão (ex: banco não acessível ainda), 
+            # podemos logar e assumir falso para segurança ou propagar.
+            # Aqui vamos assumir que se não conseguimos conectar para contar, 
+            # não podemos garantir que está vazio.
+            self.console.print(f"[red]Erro ao verificar tabelas no banco: {e}[/red]")
+            return False
+
     def do_init(self):
         config_file = Path("config.yaml")
         if not config_file.exists():
             self.console.print("[red]Arquivo config.yaml não encontrado na raiz.[/red]")
             return
 
+        self._show_config_preview(config_file)
+
         # O banco DEVE ser criado pelo DBA de antemão. Se já existe: OK. Se não: avisa.
         db_name = self._check_db_exists(config_file)
         if db_name:
             self.console.print(f"[bold green][OK][/bold green] Banco de destino '[bold cyan]{db_name}[/bold cyan]' já existe no PostgreSQL e será utilizado.")
+            
+            # NOVA VALIDAÇÃO INEGOCIÁVEL
+            if not self._check_db_empty(config_file, db_name):
+                self.console.print("[bold red][ERRO FATAL][/bold red] O banco de destino não está vazio.")
+                self.console.print("[red]A inicialização de uma nova migração requer um banco limpo para evitar sobrescrever dados de produção ou de migrações anteriores.[/red]")
+                self.console.print("[red]Ação abortada. Se deseja recomeçar, limpe o banco ('DROP SCHEMA public CASCADE; CREATE SCHEMA public;') antes de rodar o /init.[/red]")
+                return
         else:
             self.console.print("[bold yellow][AVISO][/bold yellow] Banco de destino não encontrado no PostgreSQL.")
             self.console.print("[yellow]O banco deve ser criado pelo DBA antes de prosseguir com a migração.[/yellow]")
             confirm = self.session.prompt("Deseja prosseguir mesmo assim? (s/N): ").strip().lower()
             if confirm != 's':
                 return
+
+        if not self._query_versao_inst(config_file):
+            self.console.print("[yellow]Operação cancelada pelo usuário.[/yellow]")
+            return
 
         seq = self.project.get_next_seq()
 

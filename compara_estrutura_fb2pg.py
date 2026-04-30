@@ -71,6 +71,16 @@ def _fb_charset(raw: str) -> str:
     return _CONFIG_CHARSET_TO_FB.get(raw.lower(), raw.upper())
 
 
+# ─── Acumulador de SQL de correções ───────────────────────────────────────────
+_SQL_OUTPUT: List[str] = []
+
+def register_sql(table: str, cmd: str, is_comment: bool = False):
+    if is_comment:
+        _SQL_OUTPUT.append(f'-- [TABELA: {table}] {cmd}')
+    else:
+        _SQL_OUTPUT.append(cmd)
+
+
 # ─── Rich (opcional) ──────────────────────────────────────────────────────────
 try:
     from rich.console import Console
@@ -163,6 +173,95 @@ def _pg_count(conn, schema: str, table: str) -> int:
     cur = conn.cursor()
     cur.execute(f'SELECT COUNT(*) FROM "{schema}"."{table}"')
     return cur.fetchone()[0]
+
+
+# ─── COLUNAS ──────────────────────────────────────────────────────────────────
+
+def normalize_fb_type(f_type, f_sub_type, char_len, f_length, f_prec, f_scale) -> str:
+    if f_type in (7, 8, 16) and f_sub_type in (1, 2):
+        scale = -f_scale if f_scale and f_scale < 0 else 0
+        prec  = f_prec if f_prec else 0
+        return f"numeric({prec},{scale})"
+    elif f_type == 7:  return "smallint"
+    elif f_type == 8:  return "integer"
+    elif f_type == 16: return "bigint"
+    elif f_type == 10: return "real"
+    elif f_type == 27: return "double precision"
+    elif f_type == 12: return "date"
+    elif f_type == 13: return "time without time zone"
+    elif f_type == 35: return "timestamp without time zone"
+    elif f_type == 14: return f"character({char_len or f_length})"
+    elif f_type == 37: return f"character varying({char_len or f_length})"
+    elif f_type == 261:
+        if f_sub_type == 1: return "text"
+        else:               return "bytea"
+    elif f_type == 23: return "boolean"
+    return f"unknown_{f_type}"
+
+
+def normalize_pg_type(data_type, char_len, num_prec, num_scale) -> str:
+    dt = (data_type or '').lower()
+    if dt == 'decimal': dt = 'numeric'
+    if dt in ('character varying', 'character'):
+        return f"{dt}({char_len})" if char_len else dt
+    if dt == 'numeric':
+        if num_prec is not None and num_scale is not None:
+            return f"numeric({num_prec},{num_scale})"
+        elif num_prec is not None:
+            return f"numeric({num_prec},0)"
+        return dt
+    if dt == 'int4':   return 'integer'
+    if dt == 'int8':   return 'bigint'
+    if dt == 'int2':   return 'smallint'
+    if dt == 'float4': return 'real'
+    if dt == 'float8': return 'double precision'
+    if dt == 'bpchar': return 'character'
+    return dt
+
+
+def _fb_get_columns(conn, table: str) -> dict:
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+            TRIM(r.RDB$FIELD_NAME)    AS col_name,
+            f.RDB$FIELD_TYPE          AS f_type,
+            f.RDB$FIELD_SUB_TYPE      AS f_sub_type,
+            f.RDB$FIELD_LENGTH        AS f_length,
+            f.RDB$CHARACTER_LENGTH    AS char_len,
+            f.RDB$FIELD_PRECISION     AS f_precision,
+            f.RDB$FIELD_SCALE         AS f_scale,
+            r.RDB$NULL_FLAG           AS null_flag
+        FROM RDB$RELATION_FIELDS r
+        JOIN RDB$FIELDS f ON r.RDB$FIELD_SOURCE = f.RDB$FIELD_NAME
+        WHERE TRIM(r.RDB$RELATION_NAME) = ?
+        ORDER BY r.RDB$FIELD_POSITION
+    """, (table,))
+    cols = {}
+    for row in cur.fetchall():
+        col_name, f_type, f_sub_type, f_length, char_len, f_prec, f_scale, null_flag = row
+        cols[col_name.lower()] = {
+            'type':     normalize_fb_type(f_type, f_sub_type, char_len, f_length, f_prec, f_scale),
+            'not_null': (null_flag == 1),
+        }
+    return cols
+
+
+def _pg_get_columns(conn, schema: str, table: str) -> dict:
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT column_name, data_type, character_maximum_length,
+               numeric_precision, numeric_scale, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = %s AND table_name = %s
+    """, (schema, table))
+    cols = {}
+    for row in cur.fetchall():
+        col_name, data_type, char_len, num_prec, num_scale, is_nullable = row
+        cols[col_name.lower()] = {
+            'type':     normalize_pg_type(data_type, char_len, num_prec, num_scale),
+            'not_null': (is_nullable == 'NO'),
+        }
+    return cols
 
 
 # ─── PRIMARY KEYS ─────────────────────────────────────────────────────────────
@@ -304,6 +403,11 @@ _PG_CONFTYPE: Dict[str, str] = {
     'a': 'NO ACTION', 'r': 'RESTRICT', 'c': 'CASCADE',
     'n': 'SET NULL', 'd': 'SET DEFAULT',
 }
+
+
+def _norm_fk_rule(rule: str) -> str:
+    # RESTRICT = NO ACTION para constraints não-DEFERRABLE (Firebird não suporta DEFERRABLE)
+    return 'NO ACTION' if rule == 'RESTRICT' else rule
 
 
 def _pg_get_fk_rules(conn, schema: str, table: str) -> Dict[Tuple, Tuple[str, str]]:
@@ -601,6 +705,7 @@ def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str,
     result = {
         'table': table_key,
         'count_ok': True,
+        'cols_ok':  True,
         'pk_ok': True,
         'fk_ok': True,
         'idx_ok': True,
@@ -608,7 +713,7 @@ def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str,
         'check_ok': True,
         'issues': []
     }
-    
+
     # ─── Contagem ─────────────────────────────────────────────────────
     if not skip_count:
         try:
@@ -621,7 +726,58 @@ def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str,
         except Exception as e:
             result['count_ok'] = False
             result['issues'].append(f"COUNT: ERRO - {e}")
-    
+
+    # ─── Colunas ──────────────────────────────────────────────────────
+    try:
+        fb_cols_map = _fb_get_columns(fb_conn, fb_name.upper())
+        pg_cols_map = _pg_get_columns(pg_conn, schema, pg_name)
+
+        fb_col_names = set(fb_cols_map.keys())
+        pg_col_names = set(pg_cols_map.keys())
+
+        missing_in_pg = fb_col_names - pg_col_names
+        extra_in_pg   = pg_col_names - fb_col_names
+
+        if missing_in_pg:
+            result['cols_ok'] = False
+            result['issues'].append(f"Colunas FALTANDO no PG: {sorted(missing_in_pg)}")
+            for c in sorted(missing_in_pg):
+                ctype    = fb_cols_map[c]['type']
+                cnotnull = " NOT NULL" if fb_cols_map[c]['not_null'] else ""
+                register_sql(pg_name, f"Coluna '{c}' faltando no PostgreSQL", True)
+                register_sql(pg_name, f"ALTER TABLE {schema}.{pg_name} ADD COLUMN {c} {ctype}{cnotnull};")
+
+        if extra_in_pg:
+            result['cols_ok'] = False
+            result['issues'].append(f"Colunas EXTRAS no PG (não existem no FB): {sorted(extra_in_pg)}")
+            for c in sorted(extra_in_pg):
+                register_sql(pg_name, f"Coluna '{c}' existe apenas no PostgreSQL (avaliar DROP)", True)
+                register_sql(pg_name, f"-- ALTER TABLE {schema}.{pg_name} DROP COLUMN {c};")
+
+        for c in sorted(fb_col_names & pg_col_names):
+            fb_c = fb_cols_map[c]
+            pg_c = pg_cols_map[c]
+            diffs = []
+            if fb_c['type'] != pg_c['type']:
+                result['issues'].append(
+                    f"[WARNING-TIPO] Coluna '{c}': FB={fb_c['type']} vs PG={pg_c['type']} (compatível — sem ação)"
+                )
+                # Diferença de tipo FB→PG é esperada na conversão — nunca gerar ALTER COLUMN TYPE
+            if fb_c['not_null'] != pg_c['not_null']:
+                diffs.append(f"NOT NULL FB={fb_c['not_null']} PG={pg_c['not_null']}")
+                register_sql(pg_name, f"Divergência de NOT NULL na coluna '{c}': FB={fb_c['not_null']} vs PG={pg_c['not_null']}", True)
+                if fb_c['not_null']:
+                    register_sql(pg_name, f"ALTER TABLE {schema}.{pg_name} ALTER COLUMN {c} SET NOT NULL;")
+                else:
+                    register_sql(pg_name, f"ALTER TABLE {schema}.{pg_name} ALTER COLUMN {c} DROP NOT NULL;")
+            if diffs:
+                result['cols_ok'] = False
+                result['issues'].append(f"Coluna '{c}' difere: {', '.join(diffs)}")
+
+    except Exception as e:
+        result['cols_ok'] = False
+        result['issues'].append(f"COLS: ERRO - {e}")
+
     # ─── Primary Key ──────────────────────────────────────────────────
     try:
         fb_pk = _fb_get_pk(fb_conn, fb_name.upper())
@@ -662,7 +818,7 @@ def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str,
             if key in pg_fk_rules:
                 fb_del, fb_upd = fb_fk_rules[key]
                 pg_del, pg_upd = pg_fk_rules[key]
-                if fb_del != pg_del or fb_upd != pg_upd:
+                if _norm_fk_rule(fb_del) != _norm_fk_rule(pg_del) or _norm_fk_rule(fb_upd) != _norm_fk_rule(pg_upd):
                     result['fk_ok'] = False
                     result['issues'].append(
                         f"FK-RULES {key}: "
@@ -756,7 +912,8 @@ def _print_summary_plain(results: List[dict], only_fb: List[str], only_pg: List[
     
     total = len(results)
     perfect = sum(1 for r in results if all([
-        r['count_ok'], r['pk_ok'], r['fk_ok'], r['idx_ok'], r['uniq_ok'], r['check_ok']
+        r['count_ok'], r.get('cols_ok', True), r['pk_ok'], r['fk_ok'],
+        r['idx_ok'], r['uniq_ok'], r['check_ok']
     ]))
 
     issues = [r for r in results if r['issues']]
@@ -767,34 +924,35 @@ def _print_summary_plain(results: List[dict], only_fb: List[str], only_pg: List[
     print(f'\n  Total de tabelas comparadas: {total}')
     print(f'  Tabelas 100% OK: {perfect} ({pct_ok}%)')
     print(f'  Tabelas com diferenças: {len(issues)} ({pct_err}%)')
-    
+
     if only_fb:
         print(f'\n  Tabelas só no FIREBIRD: {len(only_fb)}')
         for t in only_fb[:10]:
             print(f'    - {t}')
         if len(only_fb) > 10:
             print(f'    ... e mais {len(only_fb)-10}')
-    
+
     if only_pg:
         print(f'\n  Tabelas só no POSTGRESQL: {len(only_pg)}')
         for t in only_pg[:10]:
             print(f'    - {t}')
         if len(only_pg) > 10:
             print(f'    ... e mais {len(only_pg)-10}')
-    
+
     # Detalhamento de problemas
     if issues:
         print(f'\n  DETALHAMENTO DE DIFERENCAS:')
         print('  ' + '-' * 96)
-        
+
         for r in issues:
             status_icons = []
-            if not r['count_ok']:  status_icons.append('COUNT')
-            if not r['pk_ok']:     status_icons.append('PK')
-            if not r['fk_ok']:     status_icons.append('FK')
-            if not r['idx_ok']:    status_icons.append('IDX')
-            if not r['uniq_ok']:   status_icons.append('UNIQ')
-            if not r['check_ok']:  status_icons.append('CHECK')
+            if not r['count_ok']:         status_icons.append('COUNT')
+            if not r.get('cols_ok', True): status_icons.append('COLS')
+            if not r['pk_ok']:             status_icons.append('PK')
+            if not r['fk_ok']:             status_icons.append('FK')
+            if not r['idx_ok']:            status_icons.append('IDX')
+            if not r['uniq_ok']:           status_icons.append('UNIQ')
+            if not r['check_ok']:          status_icons.append('CHECK')
             
             print(f'\n  [{", ".join(status_icons)}] {r["table"]}')
             for issue in r['issues']:
@@ -807,7 +965,8 @@ def _print_summary_rich(results: List[dict], only_fb: List[str], only_pg: List[s
     """Relatório resumido com Rich."""
     total = len(results)
     perfect = sum(1 for r in results if all([
-        r['count_ok'], r['pk_ok'], r['fk_ok'], r['idx_ok'], r['uniq_ok'], r['check_ok']
+        r['count_ok'], r.get('cols_ok', True), r['pk_ok'], r['fk_ok'],
+        r['idx_ok'], r['uniq_ok'], r['check_ok']
     ]))
 
     issues = [r for r in results if r['issues']]
@@ -843,18 +1002,120 @@ def _print_summary_rich(results: List[dict], only_fb: List[str], only_pg: List[s
         
         for r in issues:
             status = []
-            if not r['count_ok']:  status.append('[red]COUNT[/]')
-            if not r['pk_ok']:     status.append('[yellow]PK[/]')
-            if not r['fk_ok']:     status.append('[yellow]FK[/]')
-            if not r['idx_ok']:    status.append('[yellow]IDX[/]')
-            if not r['uniq_ok']:   status.append('[yellow]UNIQ[/]')
-            if not r['check_ok']:  status.append('[yellow]CHECK[/]')
+            if not r['count_ok']:          status.append('[red]COUNT[/]')
+            if not r.get('cols_ok', True): status.append('[magenta]COLS[/]')
+            if not r['pk_ok']:             status.append('[yellow]PK[/]')
+            if not r['fk_ok']:             status.append('[yellow]FK[/]')
+            if not r['idx_ok']:            status.append('[yellow]IDX[/]')
+            if not r['uniq_ok']:           status.append('[yellow]UNIQ[/]')
+            if not r['check_ok']:          status.append('[yellow]CHECK[/]')
             
             console.print(f'\n[bold]{rich_escape(r["table"])}[/] - {" ".join(status)}')
             for issue in r['issues']:
                 console.print(f'  [dim]• {rich_escape(issue)}[/]', soft_wrap=True)
     
     console.print()
+
+
+# ─── Relatório HTML de mapeamento de tipos ────────────────────────────────────
+
+def _gerar_html_mapeamento_tipos(results: List[dict], output_path):
+    """Gera relatório HTML estático com a tabela de conversão Firebird→PostgreSQL
+    e as divergências de colunas encontradas nesta execução."""
+
+    import datetime as _dt
+
+    _MAPEAMENTO_TIPOS = [
+        ("7",           "SMALLINT",         "—",          "smallint"),
+        ("8",           "INTEGER",          "—",          "integer"),
+        ("16",          "BIGINT / INT64",   "—",          "bigint"),
+        ("7, 8, 16",    "NUMERIC/DECIMAL",  "subtype 1,2","numeric(prec,scale)"),
+        ("10",          "FLOAT",            "—",          "real"),
+        ("27",          "DOUBLE PRECISION", "—",          "double precision"),
+        ("12",          "DATE",             "—",          "date"),
+        ("13",          "TIME",             "—",          "time without time zone"),
+        ("35",          "TIMESTAMP",        "—",          "timestamp without time zone"),
+        ("14",          "CHAR(n)",          "—",          "character(n)"),
+        ("37",          "VARCHAR(n)",       "—",          "character varying(n)"),
+        ("261",         "BLOB",             "subtype=1",  "text"),
+        ("261",         "BLOB",             "subtype≠1",  "bytea"),
+        ("23",          "BOOLEAN",          "—",          "boolean"),
+    ]
+
+    # Coleta divergências de colunas dos resultados
+    col_issues = []
+    for r in results:
+        for issue in r.get('issues', []):
+            if ('FALTANDO' in issue or 'Coluna' in issue or 'Tipo FB=' in issue):
+                col_issues.append((r['table'], issue))
+
+    ts = _dt.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+
+    rows_map = '\n'.join(
+        f'<tr><td>{c}</td><td>{fb}</td><td>{sub}</td><td><strong>{pg}</strong></td></tr>'
+        for c, fb, sub, pg in _MAPEAMENTO_TIPOS
+    )
+
+    rows_div = ''
+    if col_issues:
+        rows_div = '\n'.join(
+            f'<tr><td>{t}</td><td>{i}</td></tr>'
+            for t, i in col_issues
+        )
+        div_section = f'''
+        <h2>Divergências de colunas encontradas nesta execução</h2>
+        <table>
+          <thead><tr><th>Tabela</th><th>Divergência</th></tr></thead>
+          <tbody>{rows_div}</tbody>
+        </table>'''
+    else:
+        div_section = '<p style="color:green;font-weight:bold">&#10003; Nenhuma divergência de colunas encontrada nesta execução.</p>'
+
+    html = f'''<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Mapeamento de Tipos Firebird → PostgreSQL</title>
+<style>
+  body {{ font-family: Arial, sans-serif; margin: 2em; background: #f9f9f9; color: #222; }}
+  h1 {{ color: #2c3e50; }}
+  h2 {{ color: #34495e; margin-top: 2em; }}
+  table {{ border-collapse: collapse; width: 100%; max-width: 900px; background: #fff;
+           box-shadow: 0 1px 3px rgba(0,0,0,.1); }}
+  th {{ background: #2c3e50; color: #fff; padding: 10px 14px; text-align: left; }}
+  td {{ padding: 8px 14px; border-bottom: 1px solid #ddd; }}
+  tr:hover td {{ background: #f0f4f8; }}
+  .footer {{ margin-top: 3em; font-size: .85em; color: #888; }}
+</style>
+</head>
+<body>
+<h1>Mapeamento de Tipos Firebird &rarr; PostgreSQL</h1>
+<p>Sistema SSCI &mdash; Gerado em: {ts}</p>
+
+<h2>Tabela de conversão de tipos</h2>
+<p>Conversão aplicada automaticamente durante a migração com base nos códigos internos do Firebird.</p>
+<table>
+  <thead>
+    <tr>
+      <th>Código FB (RDB$FIELD_TYPE)</th>
+      <th>Nome Firebird</th>
+      <th>Condição (subtype)</th>
+      <th>Tipo PostgreSQL</th>
+    </tr>
+  </thead>
+  <tbody>
+{rows_map}
+  </tbody>
+</table>
+
+{div_section}
+
+<div class="footer">Gerado por compara_estrutura_fb2pg.py &mdash; Migração Firebird 3 &rarr; PostgreSQL 18</div>
+</body>
+</html>
+'''
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(html)
 
 
 # ─── Main ──────────────────────────────────────────────────────────────────────
@@ -894,6 +1155,8 @@ def main():
     # Configura log
     log_dir = work_dir / 'logs'
     log_dir.mkdir(parents=True, exist_ok=True)
+    reports_dir = work_dir / 'reports'
+    reports_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / 'compare_structure.log'
     
     f_log = open(log_file, 'a', encoding='utf-8')
@@ -951,14 +1214,33 @@ def main():
         pg_conn.close()
 
     print('\nGerando relatório...')
-    
+
     if HAS_RICH:
         _print_summary_rich(results, only_fb, only_pg)
     else:
         _print_summary_plain(results, only_fb, only_pg)
 
-    # Código de saída: 0 = tudo ok, 1 = há diferenças
-    has_issues = any(r['issues'] for r in results) or only_fb or only_pg
+    # ─── SQL de correções de colunas ──────────────────────────────────
+    if _SQL_OUTPUT:
+        sql_file = log_dir / 'correcoes_colunas_pg.sql'
+        with open(sql_file, 'w', encoding='utf-8') as f:
+            f.write('-- Correções de colunas geradas por compara_estrutura_fb2pg.py\n')
+            f.write(f'-- Data: {__import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n\n')
+            f.write('\n'.join(_SQL_OUTPUT))
+            f.write('\n')
+        print(f'\nScript de correções de colunas: {sql_file}')
+
+    # ─── Relatório HTML de mapeamento de tipos ────────────────────────
+    html_file = reports_dir / 'relatorio_mapeamento_tipos_fb2pg.html'
+    _gerar_html_mapeamento_tipos(results, html_file)
+    print(f'Relatório HTML de tipos: {html_file}')
+
+    # Código de saída: 0 = tudo ok, 1 = há diferenças bloqueantes
+    # [WARNING-TIPO] são informativos — não bloqueiam o pipeline
+    def _has_blocking_issues(r):
+        return any(not i.startswith('[WARNING') for i in r['issues'])
+
+    has_issues = any(_has_blocking_issues(r) for r in results) or only_fb or only_pg
     sys.exit(1 if has_issues else 0)
 
 

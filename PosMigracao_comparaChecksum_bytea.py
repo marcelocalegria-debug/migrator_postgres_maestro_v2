@@ -249,13 +249,22 @@ def get_row_count(cursor, query: str) -> int:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def md5_of(data) -> str | None:
-    """Calcula MD5 de bytes, memoryview, ou stream BLOB. Retorna None se vazio."""
+    """Calcula MD5 de bytes, memoryview, ou stream BLOB. Retorna None se vazio.
+
+    No Linux, fdb pode retornar BLOB SUB_TYPE 1 (TEXT) como str Python (decodificado
+    via charset WIN1252). Re-encodamos com latin-1 para recuperar os bytes originais
+    que foram gravados no BYTEA, mantendo paridade com o comportamento do Windows.
+    """
     if data is None:
         return None
     if hasattr(data, "read"):          # stream fdb
         data = data.read()
     if isinstance(data, memoryview):
         data = bytes(data)
+    if isinstance(data, str):
+        # fdb no Linux decodifica BLOB TEXT com o charset da conexão (WIN1252 ≈ latin-1).
+        # Re-encodamos para latin-1 para obter os bytes brutos originais.
+        data = data.encode('latin-1', errors='replace')
     return hashlib.md5(data).hexdigest()
 
 
@@ -340,6 +349,105 @@ def comparar_com_pk(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Comparação por AMOSTRAGEM (primeiras N + meio N + últimas N linhas)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def comparar_com_pk_sample(
+    conn_fb, conn_pg,
+    fb_table: str, pg_table: str,
+    pk_cols: list[str], blob_cols: list[str],
+    n_sample: int,
+    schema: str = "public",
+) -> tuple[int, dict, list[dict], int]:
+    """
+    Compara BLOB vs BYTEA por amostragem: primeiras N + N do meio + últimas N linhas.
+
+    Retorna: (total_amostrado, stats_por_coluna, lista_de_divergências, total_real)
+    """
+    cur_pg = conn_pg.cursor()
+    cur_fb = conn_fb.cursor()
+
+    pk_pg   = ", ".join(f'"{c}"' for c in pk_cols)
+    blob_pg = ", ".join(f'"{c}"' for c in blob_cols)
+    pk_fb   = ", ".join(c.upper() for c in pk_cols)
+    blob_fb = ", ".join(c.upper() for c in blob_cols)
+    pk_len  = len(pk_cols)
+
+    # Descobre total de linhas no PostgreSQL
+    cur_pg.execute(f'SELECT COUNT(*) FROM {schema}."{pg_table}"')
+    total_real = cur_pg.fetchone()[0]
+
+    if total_real == 0:
+        stats = {col: {"ok": 0, "diff": 0, "only_fb": 0, "only_pg": 0, "both_null": 0}
+                 for col in blob_cols}
+        return 0, stats, [], 0
+
+    n = min(n_sample, total_real)
+    mid_offset = max(0, total_real // 2 - n // 2)
+    end_offset = max(0, total_real - n)
+
+    def _fetch_pg_slice(offset: int, limit: int) -> dict:
+        cur_pg.execute(
+            f'SELECT {pk_pg}, {blob_pg} FROM {schema}."{pg_table}"'
+            f' ORDER BY {pk_pg} LIMIT %s OFFSET %s',
+            (limit, offset),
+        )
+        rows = {}
+        for row in cur_pg.fetchall():
+            pk_val = tuple(row[:pk_len])
+            rows[pk_val] = {col: md5_of(row[pk_len + i]) for i, col in enumerate(blob_cols)}
+        return rows
+
+    def _fetch_fb_slice(offset: int, limit: int) -> dict:
+        cur_fb.execute(
+            f'SELECT FIRST {limit} SKIP {offset} {pk_fb}, {blob_fb} FROM {fb_table} ORDER BY {pk_fb}'
+        )
+        rows = {}
+        for row in cur_fb.fetchall():
+            pk_val = tuple(row[:pk_len])
+            rows[pk_val] = {col: md5_of(row[pk_len + i]) for i, col in enumerate(blob_cols)}
+        return rows
+
+    # Coleta as 3 fatias
+    pg_sample: dict = {}
+    fb_sample: dict = {}
+    for offset in {0, mid_offset, end_offset}:
+        pg_sample.update(_fetch_pg_slice(offset, n))
+        fb_sample.update(_fetch_fb_slice(offset, n))
+
+    # Compara
+    stats  = {col: {"ok": 0, "diff": 0, "only_fb": 0, "only_pg": 0, "both_null": 0}
+              for col in blob_cols}
+    errors: list[dict] = []
+    pg_remaining = dict(pg_sample)
+
+    for pk_val, fb_row in fb_sample.items():
+        pg_row = pg_remaining.pop(pk_val, None)
+        for i, col in enumerate(blob_cols):
+            hash_fb = fb_row[col]
+            hash_pg = pg_row[col] if pg_row is not None else None
+            if pg_row is None:
+                stats[col]["only_fb"] += 1
+            elif hash_fb is None and hash_pg is None:
+                stats[col]["both_null"] += 1
+            elif hash_fb == hash_pg:
+                stats[col]["ok"] += 1
+            else:
+                stats[col]["diff"] += 1
+                if len(errors) < 20:
+                    errors.append({"col": col, "pk": pk_val,
+                                   "hash_fb": hash_fb, "hash_pg": hash_pg})
+
+    for pk_val, pg_row in pg_remaining.items():
+        for col in blob_cols:
+            if pg_row[col] is not None:
+                stats[col]["only_pg"] += 1
+
+    total_amostrado = len(fb_sample)
+    return total_amostrado, stats, errors, total_real
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Comparação de tabela SEM chave primária (apenas contagens)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -376,16 +484,18 @@ def comparar_sem_pk(
 # Worker para execução paralela (thread-safe — conexões próprias)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _run_one_table(cfg: dict, fb_table: str, pg_table: str, schema: str) -> dict:
+def _run_one_table(cfg: dict, fb_table: str, pg_table: str, schema: str,
+                   n_sample: int = 0) -> dict:
     """Executa toda a verificação de checksum para uma tabela.
     Thread-safe: cria e fecha suas próprias conexões FB e PG.
+    Quando n_sample > 0, usa amostragem (primeiras+meio+últimas N linhas).
     """
     t0 = datetime.now()
     result: dict = {
         "tabela": pg_table, "fb_table": fb_table, "ok": False,
         "n_colunas": 0, "linhas": None, "divergencias": 0,
         "pk_cols": [], "blob_cols": [], "stats": None, "errors": [],
-        "elapsed": 0.0, "error": None,
+        "elapsed": 0.0, "error": None, "amostragem": n_sample,
     }
     try:
         conn_fb = connect_fb(cfg)
@@ -406,10 +516,17 @@ def _run_one_table(cfg: dict, fb_table: str, pg_table: str, schema: str) -> dict
             result["pk_cols"] = pk_cols
 
             if pk_cols:
-                total, stats, errors = comparar_com_pk(
-                    conn_fb, conn_pg, fb_table, pg_table,
-                    pk_cols, shared_cols, schema,
-                )
+                if n_sample > 0:
+                    total, stats, errors, total_real = comparar_com_pk_sample(
+                        conn_fb, conn_pg, fb_table, pg_table,
+                        pk_cols, shared_cols, n_sample, schema,
+                    )
+                    result["total_real"] = total_real
+                else:
+                    total, stats, errors = comparar_com_pk(
+                        conn_fb, conn_pg, fb_table, pg_table,
+                        pk_cols, shared_cols, schema,
+                    )
                 n_divs = sum(s["diff"] + s["only_fb"] + s["only_pg"]
                              for s in stats.values())
                 result.update(ok=n_divs == 0, linhas=total,
@@ -600,6 +717,8 @@ def parse_args():
     p.add_argument("--schema",  default="public", help="Schema PostgreSQL (padrão: public)")
     p.add_argument("--workers", type=int, default=10,
                    help="Tabelas em paralelo (padrão: 10 = todas simultâneas; use 1 para sequencial)")
+    p.add_argument("--sample", type=int, default=0, metavar="N",
+                   help="Amostragem: compara primeiras+meio+últimas N linhas por tabela (0=comparação completa)")
     return p.parse_args()
 
 
@@ -667,28 +786,42 @@ def main():
             n_divs  = 0
 
             if pk_cols:
-                cur_fb = conn_fb.cursor()
-                cur_fb.execute(f"SELECT COUNT(*) FROM {fb_table}")
-                total_fb = cur_fb.fetchone()[0]
-
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    BarColumn(bar_width=30),
-                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                    TextColumn("[cyan]{task.completed:,}[/cyan]/[dim]{task.total:,}[/dim]"),
-                    TimeElapsedColumn(),
-                    console=console,
-                    transient=True,
-                ) as progress:
-                    task = progress.add_task(
-                        f"  Comparando {pg_table}", total=total_fb
+                n_sample = args.sample
+                if n_sample > 0:
+                    console.print(
+                        f"  [dim][AMOSTRA: primeiras/meio/últimas {n_sample} linhas][/dim]"
                     )
-                    total, stats, errors = comparar_com_pk(
+                    total, stats, errors, total_real = comparar_com_pk_sample(
                         conn_fb, conn_pg, fb_table, pg_table,
-                        pk_cols, shared_cols, schema,
-                        progress=progress, task=task,
+                        pk_cols, shared_cols, n_sample, schema,
                     )
+                    console.print(
+                        f"  [dim]Total real da tabela: {total_real:,} linhas — "
+                        f"amostradas: {total:,}[/dim]"
+                    )
+                else:
+                    cur_fb = conn_fb.cursor()
+                    cur_fb.execute(f"SELECT COUNT(*) FROM {fb_table}")
+                    total_fb = cur_fb.fetchone()[0]
+
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn("[progress.description]{task.description}"),
+                        BarColumn(bar_width=30),
+                        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                        TextColumn("[cyan]{task.completed:,}[/cyan]/[dim]{task.total:,}[/dim]"),
+                        TimeElapsedColumn(),
+                        console=console,
+                        transient=True,
+                    ) as progress:
+                        task = progress.add_task(
+                            f"  Comparando {pg_table}", total=total_fb
+                        )
+                        total, stats, errors = comparar_com_pk(
+                            conn_fb, conn_pg, fb_table, pg_table,
+                            pk_cols, shared_cols, schema,
+                            progress=progress, task=task,
+                        )
 
                 table_ok = print_table_result_with_pk(
                     pg_table, pk_cols, shared_cols, total, stats, errors
@@ -729,9 +862,15 @@ def main():
         lock      = threading.Lock()
         completed = 0
 
+        n_sample = args.sample
+        if n_sample > 0:
+            console.print(
+                f"[dim]Modo amostragem: primeiras/meio/últimas {n_sample} linhas por tabela[/dim]\n"
+            )
+
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
             futures = {
-                pool.submit(_run_one_table, cfg, fb, pg, schema): (idx, pg)
+                pool.submit(_run_one_table, cfg, fb, pg, schema, n_sample): (idx, pg)
                 for idx, (fb, pg) in enumerate(tabelas)
             }
 
