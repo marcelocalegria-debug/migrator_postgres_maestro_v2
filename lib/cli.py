@@ -434,61 +434,89 @@ class MaestroCLI:
         if not self.current_seq:
              self.console.print("[yellow]Ative uma migração com /init ou /resume para usar o agente.[/yellow]")
              return
-        
+
         mig_dir = self.project.get_migration_dir(self.current_seq)
-        
+
         self.console.print("[bold blue]Iniciando Sessão com Agente ADK...[/bold blue]")
         self.console.print("(Digite 'sair' ou 'voltar' para retornar ao Maestro)")
-        
+
         import asyncio
         import threading
         from .ai.agent import MigrationAIAgent
-        
-        agent = MigrationAIAgent(project_path=str(mig_dir.absolute()))
-        session_id = f"cli_{self.current_seq}"
 
-        def run_async_task(coro):
-            """Helper para rodar coroutine em qualquer ambiente (mesmo com loop ativo)."""
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # Se o loop já está rodando, precisamos de uma thread para rodar o asyncio.run
-                    result_container = {"data": None, "error": None}
-                    def _thread_target():
-                        try:
-                            # Cria um novo loop na thread
-                            result_container["data"] = asyncio.run(coro)
-                        except Exception as e:
-                            result_container["error"] = e
-                    
-                    t = threading.Thread(target=_thread_target)
-                    t.start()
-                    t.join()
-                    if result_container["error"]: raise result_container["error"]
-                    return result_container["data"]
-                else:
-                    return loop.run_until_complete(coro)
-            except RuntimeError:
-                # Nenhum loop criado ainda
-                return asyncio.run(coro)
+        session_id = f"cli_{self.current_seq}"
+        project_path_str = str(mig_dir.absolute())
+
+        # Fila de mensagens do usuário (thread principal → thread async)
+        # e fila de respostas (thread async → thread principal)
+        import queue
+        msg_queue: queue.Queue = queue.Queue()
+        resp_queue: queue.Queue = queue.Queue()
+
+        def _agent_thread():
+            """
+            Executa toda a vida do agente (construção + loop de chat) dentro de um
+            único asyncio.run(). Isso garante que o McpToolset seja criado no mesmo
+            event loop que vai processar as coroutines — evitando o erro
+            "original event loop is closed".
+            """
+            async def _async_chat_loop():
+                # Constrói o agente DENTRO do loop async — McpToolset captura este loop
+                agent = MigrationAIAgent(project_path=project_path_str)
+                if not agent.model:
+                    resp_queue.put(("error", "OPENROUTER_API_KEY não configurada ou inválida."))
+                    return
+
+                resp_queue.put(("ready", None))  # Sinaliza que o agente está pronto
+
+                while True:
+                    user_msg = msg_queue.get()
+                    if user_msg is None:
+                        break  # Sinal de encerramento
+                    try:
+                        response = await agent.execute_task(session_id, user_msg)
+                        resp_queue.put(("ok", response))
+                    except Exception as e:
+                        resp_queue.put(("error", str(e)))
+
+            asyncio.run(_async_chat_loop())
+
+        t = threading.Thread(target=_agent_thread, daemon=True)
+        t.start()
+
+        # Aguarda sinal de pronto (ou erro de inicialização)
+        kind, payload = resp_queue.get()
+        if kind == "error":
+            self.console.print(f"[red]Erro ao inicializar agente: {payload}[/red]")
+            msg_queue.put(None)
+            t.join()
+            return
 
         while True:
             try:
                 user_msg = self.session.prompt("Agente >> ").strip()
-                if not user_msg: continue
+                if not user_msg:
+                    continue
                 if user_msg.lower() in ('sair', 'voltar', 'exit', 'quit'):
                     break
-                
+
                 with self.console.status("[bold green]IA pensando..."):
-                    # Passar o objeto de coroutine diretamente (não chamar await aqui)
-                    response = run_async_task(agent.execute_task(session_id, user_msg))
-                
-                self.console.print(f"\n[bold blue]AGENTE:[/bold blue]\n{response}\n")
+                    msg_queue.put(user_msg)
+                    kind, payload = resp_queue.get()
+
+                if kind == "error":
+                    self.console.print(f"[red]Erro no agente: {payload}[/red]")
+                else:
+                    self.console.print(f"\n[bold blue]AGENTE:[/bold blue]\n{payload}\n")
             except KeyboardInterrupt:
                 break
             except Exception as e:
                 self.console.print(f"[red]Erro no agente: {e}[/red]")
                 break
+
+        # Encerra a thread do agente graciosamente
+        msg_queue.put(None)
+        t.join(timeout=5)
 
     def _check_db_exists(self, config_path: Path) -> Optional[str]:
         """Verifica se o banco de destino já existe no PostgreSQL."""
@@ -748,24 +776,58 @@ class MaestroCLI:
 
         # Comportamento padrão (Geral)
         steps = self.db.list_steps(mig_info['id'])
-        
+
+        def _fmt_ts(ts):
+            if not ts:
+                return "-"
+            try:
+                dt = datetime.fromisoformat(ts)
+                return dt.strftime("%d/%m %H:%M")
+            except Exception:
+                return ts[:16]
+
+        def _duration_sec(start_ts, end_ts):
+            if not start_ts:
+                return None
+            try:
+                t0 = datetime.fromisoformat(start_ts)
+                t1 = datetime.fromisoformat(end_ts) if end_ts else datetime.now()
+                return (t1 - t0).total_seconds()
+            except Exception:
+                return None
+
+        def _fmt_hm(secs):
+            if secs is None:
+                return "-"
+            h = int(secs // 3600)
+            m = int((secs % 3600) // 60)
+            return f"{h}h{m:02d}m"
+
         table = Table(title=f"Status da Migração {self.current_seq}")
         table.add_column("Step", style="cyan")
         table.add_column("Nome")
         table.add_column("Status")
         table.add_column("Início")
         table.add_column("Fim")
-        
+        table.add_column("Duração", justify="right")
+        table.add_column("Acum.", justify="right")
+
+        acum_sec = 0.0
         for s in steps:
             status_style = "green" if s['status'] == 'completed' else "yellow" if s['status'] == 'running' else "red" if s['status'] == 'failed' else "white"
+            step_sec = _duration_sec(s['started_at'], s['completed_at'])
+            if step_sec is not None:
+                acum_sec += step_sec
             table.add_row(
                 str(s['step_number']),
                 s['step_name'],
                 f"[{status_style}]{s['status']}[/{status_style}]",
-                s['started_at'] or "-",
-                s['completed_at'] or "-"
+                _fmt_ts(s['started_at']),
+                _fmt_ts(s['completed_at']),
+                _fmt_hm(step_sec),
+                _fmt_hm(acum_sec) if step_sec is not None else "-",
             )
-        
+
         self.console.print(table)
         self.console.print("[dim]Dica: Use '/status 5' ou '/status 6' para ver detalhes das tabelas.[/dim]")
 

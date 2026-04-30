@@ -207,7 +207,8 @@ CONTEXTO:
         except Exception as e:
             if "tool_call_id" in str(e):
                 return "Ocorreu um erro de sincronização nas ferramentas. Por favor, repita a pergunta."
-            return f"-- Agente Indisponível: {str(e)} --"
+            # Inclui type e message para facilitar diagnóstico
+            return f"-- Agente Indisponível ({type(e).__name__}): {e} --"
 
 if __name__ == "__main__":
     async def chat_loop():

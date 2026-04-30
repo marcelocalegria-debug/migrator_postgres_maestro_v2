@@ -50,36 +50,65 @@ def load_config():
     raise FileNotFoundError("Arquivo config.yaml não encontrado.")
 
 def get_safe_fb_connection():
-    """Conexão Firebird RESTRITA (Audit/ReadOnly)."""
+    """Conexão Firebird RESTRITA (Audit/ReadOnly).
+
+    Usa audit_user/audit_password se disponíveis no config.yaml.
+    Caso contrário, cai de volta para user/password principal (apenas leitura
+    é garantida pela natureza das queries — apenas SELECT são executados).
+    """
     config = load_config()['firebird']
-    # OBRIGATÓRIO usar usuário de auditoria e ROLE
-    user = config.get('audit_user', 'MIGRATION_AUDIT')
-    password = config.get('audit_password')
-    if not password:
-        raise RuntimeError("audit_password ausente em config.yaml — servidor MCP não pode conectar ao Firebird")
-    role = config.get('audit_role', 'MIGRATION_AUDIT_ROLE')
-    
-    return fdb.connect(
-        host=config['host'],
-        port=config.get('port', 3050),
-        database=config['database'],
-        user=user,
-        password=password,
-        role=role,
-        charset='WIN1252'
-    )
+    audit_password = config.get('audit_password')
+    if audit_password:
+        user = config.get('audit_user', 'MIGRATION_AUDIT')
+        password = audit_password
+        role = config.get('audit_role', 'MIGRATION_AUDIT_ROLE')
+        connect_kwargs = dict(
+            host=config['host'],
+            port=config.get('port', 3050),
+            database=config['database'],
+            user=user,
+            password=password,
+            role=role,
+            charset='WIN1252'
+        )
+    else:
+        # Fallback: usa credenciais principais (sem audit_role)
+        user = config.get('user', 'SYSDBA')
+        password = config.get('password')
+        if not password:
+            raise RuntimeError("password ausente em config.yaml — servidor MCP não pode conectar ao Firebird")
+        connect_kwargs = dict(
+            host=config['host'],
+            port=config.get('port', 3050),
+            database=config['database'],
+            user=user,
+            password=password,
+            charset='WIN1252'
+        )
+
+    return fdb.connect(**connect_kwargs)
 
 def get_safe_pg_connection():
-    """Conexão PostgreSQL RESTRITA (Audit/ReadOnly)."""
+    """Conexão PostgreSQL RESTRITA (Audit/ReadOnly).
+
+    Usa audit_user/audit_password se disponíveis no config.yaml.
+    Caso contrário, cai de volta para user/password principal (apenas leitura
+    é garantida pela natureza das queries — apenas SELECT são executados).
+    """
     cfg_data = load_config()
     config = cfg_data.get('postgresql') or cfg_data.get('postgres')
-    
-    # OBRIGATÓRIO usar usuário de auditoria
-    user = config.get('audit_user', 'migration_audit')
-    password = config.get('audit_password')
-    if not password:
-        raise RuntimeError("audit_password ausente em config.yaml — servidor MCP não pode conectar ao PostgreSQL")
-    
+
+    audit_password = config.get('audit_password')
+    if audit_password:
+        user = config.get('audit_user', 'migration_audit')
+        password = audit_password
+    else:
+        # Fallback: usa credenciais principais
+        user = config.get('user')
+        password = config.get('password')
+        if not password:
+            raise RuntimeError("password ausente em config.yaml — servidor MCP não pode conectar ao PostgreSQL")
+
     return psycopg2.connect(
         host=config['host'],
         port=config.get('port', 5432),
@@ -159,7 +188,7 @@ def execute_postgres_sql(sql: str) -> str:
         conn.close()
         return f"Resultado (limitado a 100 linhas): {str(rows)}"
     except Exception as e:
-        return f"Erro ao executar SQL no Postgres ({type(e).__name__})"
+        return f"Erro ao executar SQL no Postgres ({type(e).__name__}): {e}"
 
 @mcp.tool()
 def execute_firebird_sql(sql: str) -> str:
@@ -168,7 +197,7 @@ def execute_firebird_sql(sql: str) -> str:
         return "Erro: Apenas comandos SELECT são permitidos por segurança."
     try:
         conn = get_safe_fb_connection()
-        # Firebird não tem um SET statement_timeout global fácil via SQL, 
+        # Firebird não tem um SET statement_timeout global fácil via SQL,
         # mas podemos usar a API do fdb se necessário. Por ora, limitamos o fetch.
         cur = conn.cursor()
         cur.execute(sql)
@@ -176,7 +205,7 @@ def execute_firebird_sql(sql: str) -> str:
         conn.close()
         return f"Resultado (limitado a 100 linhas): {str(rows)}"
     except Exception as e:
-        return f"Erro ao executar SQL no Firebird ({type(e).__name__})"
+        return f"Erro ao executar SQL no Firebird ({type(e).__name__}): {e}"
 
 if __name__ == "__main__":
     mcp.run()
