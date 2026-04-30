@@ -330,8 +330,10 @@ def generate_html_report(results, only_fb, only_pg, output_path):
     perfect = sum(1 for r in results if all([
         r['count_ok'], r['pk_ok'], r['fk_ok'], r['idx_ok'], r['uniq_ok'], r['check_ok']
     ]))
-    issues_list = [r for r in results if r['issues']]
-    
+    # [WARNING-TIPO] são informativos — não contabilizados como diferenças bloqueantes
+    issues_list   = [r for r in results if any(not i.startswith('[WARNING') for i in r['issues'])]
+    warnings_list = [r for r in results if r['issues'] and all(i.startswith('[WARNING') for i in r['issues'])]
+
     # Estatísticas
     stats = {
         'timestamp': datetime.now().strftime('%d/%m/%Y %H:%M:%S'),
@@ -421,8 +423,8 @@ def generate_html_report(results, only_fb, only_pg, output_path):
         
         issues_html += '</div>'
     
-    # Seção de tabelas OK
-    perfect_list = [r for r in results if not r['issues']]
+    # Seção de tabelas OK (sem issues bloqueantes — inclui as de apenas WARNING)
+    perfect_list = [r for r in results if not any(not i.startswith('[WARNING') for i in r['issues'])]
     perfect_html = ''
     if perfect_list:
         perfect_html = f'''

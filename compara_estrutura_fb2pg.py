@@ -909,14 +909,16 @@ def _print_summary_plain(results: List[dict], only_fb: List[str], only_pg: List[
     print('=' * 100)
     print('  RESUMO DA COMPARACAO DE ESTRUTURAS')
     print('=' * 100)
-    
+
     total = len(results)
     perfect = sum(1 for r in results if all([
         r['count_ok'], r.get('cols_ok', True), r['pk_ok'], r['fk_ok'],
         r['idx_ok'], r['uniq_ok'], r['check_ok']
     ]))
 
-    issues = [r for r in results if r['issues']]
+    # [WARNING-TIPO] são informativos — não contabilizados como diferenças bloqueantes
+    issues       = [r for r in results if any(not i.startswith('[WARNING') for i in r['issues'])]
+    warnings_only = [r for r in results if r['issues'] and all(i.startswith('[WARNING') for i in r['issues'])]
 
     pct_ok  = f'{perfect*100/total:.1f}' if total > 0 else '0.0'
     pct_err = f'{len(issues)*100/total:.1f}' if total > 0 else '0.0'
@@ -924,6 +926,8 @@ def _print_summary_plain(results: List[dict], only_fb: List[str], only_pg: List[
     print(f'\n  Total de tabelas comparadas: {total}')
     print(f'  Tabelas 100% OK: {perfect} ({pct_ok}%)')
     print(f'  Tabelas com diferenças: {len(issues)} ({pct_err}%)')
+    if warnings_only:
+        print(f'  Tabelas só com avisos (WARNING-TIPO): {len(warnings_only)}')
 
     if only_fb:
         print(f'\n  Tabelas só no FIREBIRD: {len(only_fb)}')
@@ -939,7 +943,7 @@ def _print_summary_plain(results: List[dict], only_fb: List[str], only_pg: List[
         if len(only_pg) > 10:
             print(f'    ... e mais {len(only_pg)-10}')
 
-    # Detalhamento de problemas
+    # Detalhamento de problemas bloqueantes
     if issues:
         print(f'\n  DETALHAMENTO DE DIFERENCAS:')
         print('  ' + '-' * 96)
@@ -953,11 +957,20 @@ def _print_summary_plain(results: List[dict], only_fb: List[str], only_pg: List[
             if not r['idx_ok']:            status_icons.append('IDX')
             if not r['uniq_ok']:           status_icons.append('UNIQ')
             if not r['check_ok']:          status_icons.append('CHECK')
-            
+
             print(f'\n  [{", ".join(status_icons)}] {r["table"]}')
             for issue in r['issues']:
                 print(f'      {issue}')
-    
+
+    # Avisos informativos (apenas WARNING-TIPO)
+    if warnings_only:
+        print(f'\n  AVISOS (compatíveis — sem ação necessária):')
+        print('  ' + '-' * 96)
+        for r in warnings_only:
+            print(f'\n  [WARNING] {r["table"]}')
+            for issue in r['issues']:
+                print(f'      {issue}')
+
     print()
 
 
@@ -969,7 +982,9 @@ def _print_summary_rich(results: List[dict], only_fb: List[str], only_pg: List[s
         r['idx_ok'], r['uniq_ok'], r['check_ok']
     ]))
 
-    issues = [r for r in results if r['issues']]
+    # [WARNING-TIPO] são informativos — não contabilizados como diferenças bloqueantes
+    issues        = [r for r in results if any(not i.startswith('[WARNING') for i in r['issues'])]
+    warnings_only = [r for r in results if r['issues'] and all(i.startswith('[WARNING') for i in r['issues'])]
 
     pct_ok  = f'{perfect*100/total:.1f}' if total > 0 else '0.0'
     pct_err = f'{len(issues)*100/total:.1f}' if total > 0 else '0.0'
@@ -986,20 +1001,22 @@ def _print_summary_rich(results: List[dict], only_fb: List[str], only_pg: List[s
     tbl.add_row('Total de tabelas', f'{total:,}')
     tbl.add_row('Tabelas 100% OK', f'[green]{perfect:,} ({pct_ok}%)[/]')
     tbl.add_row('Tabelas com diferenças', f'[red]{len(issues):,} ({pct_err}%)[/]')
+    if warnings_only:
+        tbl.add_row('Avisos WARNING-TIPO', f'[yellow]{len(warnings_only):,}[/]')
     tbl.add_row('Só no Firebird', f'[yellow]{len(only_fb):,}[/]')
     tbl.add_row('Só no PostgreSQL', f'[yellow]{len(only_pg):,}[/]')
-    
+
     console.print()
     console.print(tbl)
-    
-    # ─── Detalhamento de problemas ───────────────────────────────────
+
+    # ─── Detalhamento de problemas bloqueantes ───────────────────────
     if issues:
         console.print()
         console.print(Panel.fit(
             f'[bold red]{len(issues)} TABELAS COM DIFERENCAS[/]',
             border_style='red'
         ))
-        
+
         for r in issues:
             status = []
             if not r['count_ok']:          status.append('[red]COUNT[/]')
@@ -1009,11 +1026,23 @@ def _print_summary_rich(results: List[dict], only_fb: List[str], only_pg: List[s
             if not r['idx_ok']:            status.append('[yellow]IDX[/]')
             if not r['uniq_ok']:           status.append('[yellow]UNIQ[/]')
             if not r['check_ok']:          status.append('[yellow]CHECK[/]')
-            
+
             console.print(f'\n[bold]{rich_escape(r["table"])}[/] - {" ".join(status)}')
             for issue in r['issues']:
                 console.print(f'  [dim]• {rich_escape(issue)}[/]', soft_wrap=True)
-    
+
+    # ─── Avisos informativos (apenas WARNING-TIPO) ───────────────────
+    if warnings_only:
+        console.print()
+        console.print(Panel.fit(
+            f'[bold yellow]{len(warnings_only)} TABELAS COM AVISOS (compatível — sem ação)[/]',
+            border_style='yellow'
+        ))
+        for r in warnings_only:
+            console.print(f'\n[bold]{rich_escape(r["table"])}[/]')
+            for issue in r['issues']:
+                console.print(f'  [yellow]• {rich_escape(issue)}[/]', soft_wrap=True)
+
     console.print()
 
 
