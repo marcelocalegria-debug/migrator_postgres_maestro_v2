@@ -3,8 +3,18 @@ gera_ddl_correcao_schema.py
 ============================
 Gerador determinístico de DDL de correção de schema (FB → PG).
 Chamado pelo Maestro (S03) quando diferenças são encontradas no compare_pre.
+Nunca gera ALTER COLUMN TYPE — diferenças de tipo são reportadas como [WARNING-TIPO].
 
 Saída: MIGRACAO_XXXX/sql/schema_correction_YYYYMMDD_HHMMSS.ddl
+
+Uso:
+    python gera_ddl_correcao_schema.py --work-dir MIGRACAO_0001
+    python gera_ddl_correcao_schema.py --work-dir MIGRACAO_0001 --schema public
+
+Parâmetros:
+    --work-dir DIR    Diretório da migração (obrigatório)
+    --config PATH     config.yaml alternativo (padrão: work-dir/config.yaml)
+    --schema SCHEMA   Schema PostgreSQL (padrão: lido do config ou "public")
 
 Exit codes:
     0 = DDL gerado com correções automáticas

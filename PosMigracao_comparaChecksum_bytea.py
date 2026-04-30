@@ -3,19 +3,26 @@
 PosMigracao_comparaChecksum_bytea.py
 ======================================
 Compara o checksum MD5 de colunas BLOB binário (Firebird) vs BYTEA (PostgreSQL)
-para as 10 tabelas da migração Fire2pg.
+para verificação de integridade pós-migração.
 
 Estratégia:
   - Descobre automaticamente colunas BLOB SUB_TYPE 0 (binário) no Firebird
-  - Descobre automaticamente colunas BYTEA no PostgreSQL
-  - Para tabelas COM chave primária: comparação linha a linha (PK como chave de join)
-  - Para tabelas SEM chave primária: comparação por contagens de não-nulos
+  - Para tabelas COM PK: comparação linha a linha (PK como chave de join)
+  - Para tabelas SEM PK: comparação por contagens de não-nulos
   - Relatório final formatado com Rich
 
 Uso:
     python PosMigracao_comparaChecksum_bytea.py
-    python PosMigracao_comparaChecksum_bytea.py --config config.yaml
     python PosMigracao_comparaChecksum_bytea.py --table operacao_credito
+    python PosMigracao_comparaChecksum_bytea.py --workers 1   # evita OOM com BLOBs grandes
+    python PosMigracao_comparaChecksum_bytea.py --sample 1000 # compara apenas N linhas
+
+Parâmetros:
+    --config PATH     config.yaml (padrão: config.yaml)
+    --table TABELA    Processa apenas a tabela especificada
+    --schema SCHEMA   Schema PostgreSQL (padrão: public)
+    --workers N       Threads paralelas (padrão: 10; reduzir para BLOBs grandes)
+    --sample N        Compara apenas os primeiros N registros por tabela (0 = todos)
 """
 
 import os

@@ -1,11 +1,18 @@
 """
-gera_relatorio_html.py
-======================
-Gera relatório HTML detalhado da comparação de estruturas.
+gera_relatorio_compara_estrutura_fb2pg_html.py
+===============================================
+Gera relatório HTML detalhado da comparação de estruturas FB×PG.
 Pode ser executado após o script principal ou de forma independente.
 
 Uso:
-    python gera_relatorio_compara_estrutura_fb2pg_html.py --work-dir MIGRACAO_0001 [--config config.yaml] [--output relatorio.html]
+    python gera_relatorio_compara_estrutura_fb2pg_html.py --work-dir MIGRACAO_0001
+    python gera_relatorio_compara_estrutura_fb2pg_html.py --work-dir MIGRACAO_0001 --output relatorio.html
+
+Parâmetros:
+    --work-dir DIR    Diretório da migração (obrigatório)
+    --config PATH     config.yaml alternativo (padrão: work-dir/config.yaml)
+    --schema SCHEMA   Schema PostgreSQL (padrão: lido do config)
+    --output PATH     Arquivo HTML de saída (padrão: work-dir/reports/relatorio_estrutura.html)
 """
 
 import argparse

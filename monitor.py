@@ -2,13 +2,20 @@
 """
 monitor.py
 ==========
-Versão restaurada e atualizada do monitor clássico para o Maestro V2.
-Acompanha progresso de Big Tables e Small Tables.
+Monitor Rich TUI para Maestro V2. Exibe progresso de Big Tables e Small Tables
+lendo o migration.db dentro do diretório da migração.
 
 Uso:
     python monitor.py MIGRACAO_0005
-    python monitor.py MIGRACAO_0005 --small-tables
     python monitor.py MIGRACAO_0005 --big-tables
+    python monitor.py MIGRACAO_0005 --small-tables
+    python monitor.py MIGRACAO_0005 -i 5.0      # atualiza a cada 5 segundos
+
+Parâmetros:
+    session              Diretório da migração (ex: MIGRACAO_0005) [obrigatório]
+    --big-tables         Foca nas 10 big tables
+    --small-tables       Modo progresso global small tables
+    -i/--interval SECS   Intervalo de atualização em segundos (padrão: 2.0)
 """
 
 import sys

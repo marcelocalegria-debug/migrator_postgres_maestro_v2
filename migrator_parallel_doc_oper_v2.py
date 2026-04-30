@@ -1,31 +1,31 @@
 #!/usr/bin/env python3
 """
-migrator_parallel_doc_oper.py
-==============================
+migrator_parallel_doc_oper_v2.py
+=================================
 Migra DOCUMENTO_OPERACAO (Firebird 3 -> PostgreSQL) em N threads paralelas.
-
 Particionamento por range de NU_OPERACAO (chave líder da PK composta).
-Cada thread migra um slice com checkpoint independente e log próprio.
-O monitor.py acompanha o progresso agregado via migration_state_documento_operacao.db.
+
+Chamado pelo Maestro V2 (S06) ou diretamente como standalone.
 
 Uso:
-    source .venv/bin/activate
-    export PYTHONIOENCODING=utf-8
-    python migrator_parallel_doc_oper.py --threads 4
-    python migrator_parallel_doc_oper.py --threads 4 --reset
-    python migrator_parallel_doc_oper.py --threads 4 --dry-run
-    python migrator_parallel_doc_oper.py --threads 4 --batch-size 5000
-    python migrator_parallel_doc_oper.py --threads 4 --use-insert
-    python migrator_parallel_doc_oper.py --threads 4 --generate-scripts-only
+    python migrator_parallel_doc_oper_v2.py --work-dir MIGRACAO_0001 --threads 4
+    python migrator_parallel_doc_oper_v2.py --work-dir MIGRACAO_0001 --threads 4 --reset
+    python migrator_parallel_doc_oper_v2.py --work-dir MIGRACAO_0001 --threads 4 --dry-run
+    python migrator_parallel_doc_oper_v2.py --work-dir MIGRACAO_0001 --threads 4 --batch-size 5000
+    python migrator_parallel_doc_oper_v2.py --work-dir MIGRACAO_0001 --threads 4 --use-insert
+    python migrator_parallel_doc_oper_v2.py --work-dir MIGRACAO_0001 --threads 4 --generate-scripts-only
 
-Arquivos gerados:
-    migration_state_documento_operacao.db          -> monitor.py (progresso agregado)
-    migration_state_documento_operacao_tN.db       -> checkpoint individual por thread
-    migration_documento_operacao_tN.log            -> log individual por thread
-    migration_documento_operacao_parallel.log      -> log do orquestrador
-    disable_constraints_documento_operacao.sql
-    enable_constraints_documento_operacao.sql
-    constraint_state_documento_operacao.json
+Parâmetros:
+    --work-dir DIR           Diretório da migração (obrigatório)
+    --threads N              Número de threads paralelas (padrão: 4)
+    --config PATH            config.yaml alternativo (padrão: work-dir/config.yaml)
+    --batch-size N           Linhas por batch COPY (padrão: lido do config)
+    --reset                  Apaga checkpoints e reinicia do zero
+    --dry-run                Sem escrita no PostgreSQL
+    --use-insert             Usa INSERT em vez de COPY
+    --generate-scripts-only  Só gera SQL de constraints, não migra dados
+    --master-db PATH         migration.db do Maestro (progresso integrado ao monitor)
+    --migration-id INT       ID da migração no master-db
 """
 
 import sys

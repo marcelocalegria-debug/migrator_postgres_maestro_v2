@@ -1,4 +1,27 @@
 #!/usr/bin/env python3
+"""
+migrator_smalltables_v2.py
+===========================
+Migra as tabelas pequenas do Firebird 3 -> PostgreSQL via ProcessPoolExecutor.
+Auto-descobre tabelas não listadas em exclude_tables no config.yaml (~901 tabelas).
+Checkpoint/restart: tabelas já concluídas são puladas automaticamente.
+
+Chamado pelo Maestro V2 (S07) ou diretamente como standalone.
+
+Uso:
+    python migrator_smalltables_v2.py --work-dir MIGRACAO_0001 --small-tables
+    python migrator_smalltables_v2.py --work-dir MIGRACAO_0001 --small-tables --workers 6
+    python migrator_smalltables_v2.py --work-dir MIGRACAO_0001 --table CEP
+
+Parâmetros:
+    --work-dir DIR       Diretório da migração (obrigatório)
+    --small-tables       Migra todas as tabelas (exceto exclude_tables do config)
+    --table TABELA       Migra apenas uma tabela específica
+    --workers N          Workers ProcessPoolExecutor (padrão: lido do config)
+    --config PATH        config.yaml alternativo (padrão: work-dir/config.yaml)
+    --master-db PATH     migration.db do Maestro (progresso integrado ao monitor)
+    --migration-id INT   ID da migração no master-db
+"""
 import sys
 import os
 import io

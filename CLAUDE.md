@@ -48,7 +48,7 @@ Steps run in order: S00 precheck → S01 create DB → S02 import schema → S03
 
 | Script | Strategy | Target |
 |--------|----------|--------|
-| `migrator_v2.py` | Sequential, config-driven | Most tables (via `config.yaml` or `--table`) |
+| `migrator_v2.py` | Sequential, checkpoint/restart | Any table via `--work-dir` + `--table` (required) |
 | `migrator_parallel_doc_oper_v2.py` | ThreadPoolExecutor, PK range partitioning | DOCUMENTO_OPERACAO (largest, composite PK) |
 | `migrator_log_eventos_v2.py` | ThreadPoolExecutor, RDB$DB_KEY partitioning | LOG_EVENTOS (no PK) |
 | `migrator_smalltables_v2.py` | ProcessPoolExecutor, auto-discovery | ~901 small tables (excludes 10 big ones) |
@@ -61,10 +61,12 @@ All migrators share: checkpoint to SQLite, COPY protocol insertion, sub-batch re
 
 ### Validation Scripts
 
-- `compara_cont_fb2pg.py` — Row count comparison Firebird vs PostgreSQL
-- `compara_estrutura_fb2pg.py` — Structural comparison (PKs, FKs, indices, constraints)
-- `PosMigracao_comparaChecksum_bytea.py` — MD5 checksum for BLOB/BYTEA columns
-- `gera_relatorio_compara_estrutura_fb2pg_html.py` — HTML report generation
+- `compara_cont_fb2pg.py` — Row count comparison Firebird vs PostgreSQL (`--work-dir` required)
+- `compara_estrutura_fb2pg.py` — Structural comparison (PKs, FKs, indices, constraints) (`--work-dir` required)
+- `compara_estrutura_FULL_fb2pg.py` — Same as above + column/type mapping FB→PG (`--work-dir` required)
+- `PosMigracao_comparaChecksum_bytea.py` — MD5 checksum for BLOB/BYTEA columns (`--config`, `--workers`, `--sample`)
+- `gera_relatorio_compara_estrutura_fb2pg_html.py` — HTML report generation (`--work-dir` required)
+- `gera_ddl_correcao_schema.py` — DDL correction generator called by S03; never generates ALTER COLUMN TYPE (`--work-dir` required)
 
 ### Monitoring
 
@@ -103,41 +105,46 @@ pip install -r requirements.txt
 python maestro.py                       # Interactive CLI (auto-resumes last migration)
 python maestro.py --resume 0005         # Explicitly resume migration 0005
 
-# ── Legacy standalone scripts ─────────────────────────────────────────────────
-# Sequential — table from config.yaml
-python migrator_v2.py
-
-# Sequential — override table via CLI
-python migrator_v2.py --table OPERACAO_CREDITO
-
-# Restart from scratch (drops SQLite checkpoint)
-python migrator_v2.py --table OPERACAO_CREDITO --reset
-
-# Dry run (no writes)
-python migrator_v2.py --table OPERACAO_CREDITO --dry-run
-
-# Generate constraint SQL scripts only
-python migrator_v2.py --table OPERACAO_CREDITO --generate-scripts-only
+# ── Standalone scripts (--work-dir is required for all migrators and validation scripts) ──
+# Sequential migrator — single table
+python migrator_v2.py --work-dir MIGRACAO_0001 --table OPERACAO_CREDITO
+python migrator_v2.py --work-dir MIGRACAO_0001 --table OPERACAO_CREDITO --reset
+python migrator_v2.py --work-dir MIGRACAO_0001 --table OPERACAO_CREDITO --dry-run
+python migrator_v2.py --work-dir MIGRACAO_0001 --table OPERACAO_CREDITO --use-insert
 
 # Parallel migration — DOCUMENTO_OPERACAO (composite PK, PK-range partitioned)
-python migrator_parallel_doc_oper_v2.py --threads 4
+python migrator_parallel_doc_oper_v2.py --work-dir MIGRACAO_0001 --threads 4
+python migrator_parallel_doc_oper_v2.py --work-dir MIGRACAO_0001 --threads 4 --reset
 
 # Parallel migration — LOG_EVENTOS (no PK, RDB$DB_KEY partitioned)
-python migrator_log_eventos_v2.py --threads 8
+python migrator_log_eventos_v2.py --work-dir MIGRACAO_0001 --threads 8
+python migrator_log_eventos_v2.py --work-dir MIGRACAO_0001 --threads 8 --reset
 
 # Small tables (~901 tables, ProcessPoolExecutor)
-python migrator_smalltables_v2.py --small-tables
+python migrator_smalltables_v2.py --work-dir MIGRACAO_0001 --small-tables
+python migrator_smalltables_v2.py --work-dir MIGRACAO_0001 --small-tables --workers 6
+python migrator_smalltables_v2.py --work-dir MIGRACAO_0001 --table CEP
 
 # Monitor progress (Rich TUI)
 python monitor.py MIGRACAO_0005
 python monitor.py MIGRACAO_0005 --big-tables
+python monitor.py MIGRACAO_0005 --small-tables
+python monitor.py MIGRACAO_0005 -i 5.0
 
 # Post-migration validation
-python compara_estrutura_fb2pg.py
-python gera_relatorio_compara_estrutura_fb2pg_html.py
+python compara_estrutura_fb2pg.py --work-dir MIGRACAO_0001
+python compara_estrutura_fb2pg.py --work-dir MIGRACAO_0001 --verbose
+python compara_estrutura_FULL_fb2pg.py --work-dir MIGRACAO_0001
+python compara_cont_fb2pg.py --work-dir MIGRACAO_0001
+python gera_relatorio_compara_estrutura_fb2pg_html.py --work-dir MIGRACAO_0001
+
+# Checksum BLOB/BYTEA integrity
+python PosMigracao_comparaChecksum_bytea.py --table OPERACAO_CREDITO
+python PosMigracao_comparaChecksum_bytea.py --workers 1 --sample 1000
 
 # Re-enable constraints
 python enable_constraints.py
+python enable_constraints.py -t TABELA --fail-fast
 
 # Emergency: repair composite FK JSON/SQL if cartesian-join bug produced duplicate columns
 python repair_fk_scripts.py

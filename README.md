@@ -229,52 +229,60 @@ python maestro.py --resume 0005
 
 ```bash
 # Tabela individual (seq, com checkpoint/restart)
-python migrator_v2.py --table OPERACAO_CREDITO
-python migrator_v2.py --table OPERACAO_CREDITO --reset         # reinicia do zero
-python migrator_v2.py --table OPERACAO_CREDITO --dry-run       # sem escrita PG
-python migrator_v2.py --table OPERACAO_CREDITO --batch-size 5000
-python migrator_v2.py --table OPERACAO_CREDITO --use-insert    # COPY → INSERT
+python migrator_v2.py --work-dir MIGRACAO_0001 --table OPERACAO_CREDITO
+python migrator_v2.py --work-dir MIGRACAO_0001 --table OPERACAO_CREDITO --reset
+python migrator_v2.py --work-dir MIGRACAO_0001 --table OPERACAO_CREDITO --dry-run
+python migrator_v2.py --work-dir MIGRACAO_0001 --table OPERACAO_CREDITO --use-insert
 
 # DOCUMENTO_OPERACAO (paralelo por range de PK)
-python migrator_parallel_doc_oper_v2.py --threads 4
+python migrator_parallel_doc_oper_v2.py --work-dir MIGRACAO_0001 --threads 4
+python migrator_parallel_doc_oper_v2.py --work-dir MIGRACAO_0001 --threads 4 --reset
+python migrator_parallel_doc_oper_v2.py --work-dir MIGRACAO_0001 --threads 4 --dry-run
 
 # LOG_EVENTOS (paralelo por RDB$DB_KEY, sem PK)
-python migrator_log_eventos_v2.py --threads 8
-python migrator_log_eventos_v2.py --dry-run
-python migrator_log_eventos_v2.py --reset
+python migrator_log_eventos_v2.py --work-dir MIGRACAO_0001 --threads 8
+python migrator_log_eventos_v2.py --work-dir MIGRACAO_0001 --threads 8 --dry-run
+python migrator_log_eventos_v2.py --work-dir MIGRACAO_0001 --threads 8 --reset
 
 # ~901 tabelas pequenas (ProcessPoolExecutor)
-python migrator_smalltables_v2.py --small-tables
-python migrator_smalltables_v2.py --small-tables --workers 6
-python migrator_smalltables_v2.py --small-tables --dry-run
-python migrator_smalltables_v2.py --small-tables --reset
+python migrator_smalltables_v2.py --work-dir MIGRACAO_0001 --small-tables
+python migrator_smalltables_v2.py --work-dir MIGRACAO_0001 --small-tables --workers 6
+python migrator_smalltables_v2.py --work-dir MIGRACAO_0001 --table CEP
 ```
 
 ### Monitor
 
 ```bash
-# Monitor da migração ativa (migration.db)
-python monitor_oldschool_v2_updated.py MIGRACAO_0005
-python monitor_oldschool_v2_updated.py MIGRACAO_0005 --big-tables
-python monitor_oldschool_v2_updated.py MIGRACAO_0005 --small-tables
+# Monitor da migração ativa (lê migration.db do diretório)
+python monitor.py MIGRACAO_0005
+python monitor.py MIGRACAO_0005 --big-tables
+python monitor.py MIGRACAO_0005 --small-tables
+python monitor.py MIGRACAO_0005 -i 5.0        # atualiza a cada 5 segundos
 ```
 
 ### Validação e comparação
 
 ```bash
 # Comparação estrutural (PKs, FKs, índices, constraints)
-python compara_estrutura_fb2pg.py
-python compara_estrutura_fb2pg.py --verbose
+python compara_estrutura_fb2pg.py --work-dir MIGRACAO_0001
+python compara_estrutura_fb2pg.py --work-dir MIGRACAO_0001 --verbose
+python compara_estrutura_fb2pg.py --work-dir MIGRACAO_0001 --skip-count
+
+# Comparação FULL (inclui colunas e tipos FB→PG)
+python compara_estrutura_FULL_fb2pg.py --work-dir MIGRACAO_0001
+python compara_estrutura_FULL_fb2pg.py --work-dir MIGRACAO_0001 --verbose
 
 # Contagem de rows (todas as tabelas)
-python compara_cont_fb2pg.py
+python compara_cont_fb2pg.py --work-dir MIGRACAO_0001
 
 # Checksum BYTEA/BLOB (verificação de integridade binária)
 python PosMigracao_comparaChecksum_bytea.py --table OPERACAO_CREDITO
 python PosMigracao_comparaChecksum_bytea.py --workers 1   # 1 de cada vez (evita OOM)
+python PosMigracao_comparaChecksum_bytea.py --sample 1000 # apenas N linhas por tabela
 
 # Relatório HTML consolidado
-python gera_relatorio_compara_estrutura_fb2pg_html.py --output relatorio_final.html
+python gera_relatorio_compara_estrutura_fb2pg_html.py --work-dir MIGRACAO_0001
+python gera_relatorio_compara_estrutura_fb2pg_html.py --work-dir MIGRACAO_0001 --output relatorio_final.html
 ```
 
 ### Re-enable de constraints (emergência)
@@ -282,6 +290,10 @@ python gera_relatorio_compara_estrutura_fb2pg_html.py --output relatorio_final.h
 ```bash
 # Se pipeline foi interrompido após disable_constraints
 python enable_constraints.py
+python enable_constraints.py --dry-run             # simula sem executar
+python enable_constraints.py -t operacao_credito   # apenas uma tabela
+python enable_constraints.py --fail-fast           # para ao primeiro erro
+python enable_constraints.py --report log.txt      # grava relatório em arquivo
 
 # Ou manualmente via psql (usando o SQL gerado)
 psql -h HOST -U USER -d DB -f MIGRACAO_0005/sql/enable_constraints_TABELA.sql
@@ -329,7 +341,7 @@ ps aux | grep -E "migrator|maestro"
 3. Verificar log do MCP após query malformada: exception não deve conter password.
 4. Confirmar que `/rerun` pede confirmação antes de deletar arquivos de estado.
 5. Confirmar que monitor exibe alerta se thread sem progresso > 5 min.
-6. `python compara_cont_fb2pg.py` + `python compara_estrutura_fb2pg.py` — diff deve ser zero após migração completa.
+6. `python compara_cont_fb2pg.py --work-dir MIGRACAO_XXXX` + `python compara_estrutura_fb2pg.py --work-dir MIGRACAO_XXXX` — diff deve ser zero após migração completa.
 
 ---
 

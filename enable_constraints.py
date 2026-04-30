@@ -4,13 +4,22 @@ enable_constraints.py
 =====================
 Executa os enable_constraints_*.sql na ordem correta, recriando
 PKs, índices, unique, checks, FKs e triggers de todas as tabelas migradas.
-Gera relatório detalhado com Rich ao final.
 
 Uso:
     python enable_constraints.py
     python enable_constraints.py --dry-run
     python enable_constraints.py --dir /outro/diretorio
-    python enable_constraints.py --table operacao_credito  # só uma tabela
+    python enable_constraints.py -t operacao_credito -t documento_operacao
+    python enable_constraints.py --fail-fast
+    python enable_constraints.py --report relatorio.txt
+
+Parâmetros:
+    --config PATH       config.yaml (padrão: config.yaml)
+    -d/--dir DIR        Diretório alternativo com os SQL files
+    -t/--table TABELA   Processa apenas a tabela especificada (repetível)
+    --dry-run           Mostra o que seria executado sem rodar
+    --fail-fast         Interrompe ao primeiro erro (padrão: continua)
+    --report PATH       Grava relatório de execução em arquivo
 """
 
 import sys

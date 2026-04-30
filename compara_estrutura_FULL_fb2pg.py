@@ -1,18 +1,21 @@
 """
 compara_estrutura_FULL_fb2pg.py
-===========================
-Compara estrutura completa (contagem + PKs + FKs + índices + constraints) e colunas + tipos de conversão padrao 
-entre Firebird e PostgreSQL.
-
-Relatório detalhado:
-  - Contagem de linhas
-  - Primary Keys
-  - Foreign Keys
-  - Índices
-  - Constraints (UNIQUE, CHECK, etc)
+================================
+Compara estrutura completa (contagem + PKs + FKs + índices + constraints + colunas
+e tipos de conversão padrão) entre Firebird e PostgreSQL. Versão FULL inclui
+comparação detalhada de colunas e mapeamento de tipos FB→PG.
 
 Uso:
-    python compara_estrutura_fb2pg.py [--config config.yaml] [--schema public]
+    python compara_estrutura_FULL_fb2pg.py --work-dir MIGRACAO_0001
+    python compara_estrutura_FULL_fb2pg.py --work-dir MIGRACAO_0001 --verbose
+    python compara_estrutura_FULL_fb2pg.py --work-dir MIGRACAO_0001 --skip-count
+
+Parâmetros:
+    --work-dir DIR    Diretório da migração (obrigatório)
+    --config PATH     config.yaml alternativo (padrão: work-dir/config.yaml)
+    --schema SCHEMA   Schema PostgreSQL (padrão: lido do config)
+    --verbose         Mostra progresso detalhado
+    --skip-count      Pula comparação de contagem de registros
 """
 
 import argparse

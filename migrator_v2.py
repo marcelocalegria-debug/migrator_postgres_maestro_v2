@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
 """
 migrator_v2.py
-===========
-Migra uma tabela inteira do Firebird 3 -> PostgreSQL 18.
+==============
+Migra uma tabela do Firebird 3 -> PostgreSQL 18 com checkpoint/restart.
+COPY protocol, sub-batching automático, paginação por PK ou RDB$DB_KEY.
 
-Correções nesta versão:
-  - SELECT COUNT(*) com sintaxe corrigida
-  - BLOB TEXT convertido de WIN1252 -> UTF-8 antes de inserir no PG
-  - RDB$DB_KEY como paginação fallback (sem PK) — reiniciável e rápido
-  - Inserção via COPY protocol (3-5× mais rápido que execute_values)
-  - Sub-batching automático em caso de erro
-  - WAL optimization antes da carga
-  - Limpeza de memória explícita entre batches
-  - fetch_array_size aumentado para 10000
-  - Tratamento de memóriaview de BLOBs
+Chamado pelo Maestro V2 (S06/S07) ou diretamente como standalone.
 
 Uso:
-    python migrator_v2.py                          # inicia ou recomeça
-    python migrator_v2.py --reset                  # recomeça do zero
-    python migrator_v2.py --dry-run                # simulação
-    python migrator_v2.py --generate-scripts-only  # só gera SQL
-    python migrator_v2.py --batch-size 10000       # sobrescreve batch
-    python migrator_v2.py --use-insert             # usa INSERT em vez de COPY
+    python migrator_v2.py --work-dir MIGRACAO_0001 --table OPERACAO_CREDITO
+    python migrator_v2.py --work-dir MIGRACAO_0001 --table OPERACAO_CREDITO --reset
+    python migrator_v2.py --work-dir MIGRACAO_0001 --table OPERACAO_CREDITO --dry-run
+    python migrator_v2.py --work-dir MIGRACAO_0001 --table OPERACAO_CREDITO --use-insert
+
+Parâmetros:
+    --work-dir DIR       Diretório da migração, ex: MIGRACAO_0001 (obrigatório)
+    --table TABELA       Nome da tabela no Firebird (UPPERCASE)
+    --config PATH        config.yaml alternativo (padrão: work-dir/config.yaml)
+    --reset              Apaga checkpoint e reinicia do zero
+    --dry-run            Conecta e lê do Firebird mas não grava no PostgreSQL
+    --use-insert         Usa INSERT em vez de COPY (3–5× mais lento)
+    --master-db PATH     migration.db do Maestro (progresso integrado ao monitor)
+    --migration-id INT   ID da migração no master-db
 """
 
 import sys

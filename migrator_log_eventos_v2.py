@@ -1,35 +1,35 @@
 #!/usr/bin/env python3
 """
-migrator_log_eventos.py
-========================
+migrator_log_eventos_v2.py
+===========================
 Migra LOG_EVENTOS (Firebird 3 -> PostgreSQL) em N threads paralelas.
+LOG_EVENTOS não tem PK — particionamento usa RDB$DB_KEY (ponteiro físico de linha).
 
-LOG_EVENTOS não tem PK nem FK — o particionamento usa RDB$DB_KEY,
-o ponteiro físico de linha do Firebird (8 bytes, único, ordenável).
-Cada thread migra um slice WHERE RDB$DB_KEY >= low [AND RDB$DB_KEY < high].
+Chamado pelo Maestro V2 (S06) ou diretamente como standalone.
 
 Uso:
-    source .venv/bin/activate
-    export PYTHONIOENCODING=utf-8
-    python migrator_log_eventos.py --threads 8
-    python migrator_log_eventos.py --threads 8 --reset
-    python migrator_log_eventos.py --threads 8 --dry-run
-    python migrator_log_eventos.py --threads 8 --batch-size 5000
-    python migrator_log_eventos.py --threads 4 --use-insert
-    python migrator_log_eventos.py --generate-scripts-only
+    python migrator_log_eventos_v2.py --work-dir MIGRACAO_0001 --threads 8
+    python migrator_log_eventos_v2.py --work-dir MIGRACAO_0001 --threads 8 --reset
+    python migrator_log_eventos_v2.py --work-dir MIGRACAO_0001 --threads 8 --dry-run
+    python migrator_log_eventos_v2.py --work-dir MIGRACAO_0001 --threads 8 --batch-size 5000
+    python migrator_log_eventos_v2.py --work-dir MIGRACAO_0001 --threads 4 --use-insert
+    python migrator_log_eventos_v2.py --work-dir MIGRACAO_0001 --generate-scripts-only
 
-Arquivos gerados:
-    migration_state_log_eventos.db          -> monitor.py (progresso agregado)
-    migration_state_log_eventos_tN.db       -> checkpoint individual por thread
-    migration_log_eventos_tN.log            -> log individual por thread
-    migration_log_eventos_parallel.log      -> log do orquestrador
-    disable_constraints_log_eventos.sql
-    enable_constraints_log_eventos.sql
-    constraint_state_log_eventos.json
+Parâmetros:
+    --work-dir DIR           Diretório da migração (obrigatório)
+    --threads N              Número de threads paralelas (padrão: 8)
+    --config PATH            config.yaml alternativo (padrão: work-dir/config.yaml)
+    --batch-size N           Linhas por batch COPY (padrão: lido do config)
+    --reset                  Apaga checkpoints e reinicia do zero
+    --dry-run                Sem escrita no PostgreSQL
+    --use-insert             Usa INSERT em vez de COPY
+    --generate-scripts-only  Só gera SQL de constraints, não migra dados
+    --master-db PATH         migration.db do Maestro (progresso integrado ao monitor)
+    --migration-id INT       ID da migração no master-db
 
 Monitor:
-    python monitor.py                 # mostra todas as threads
-    python monitor.py --big-tables    # inclui log_eventos e threads _tN
+    python monitor.py MIGRACAO_0005              # mostra todas as threads
+    python monitor.py MIGRACAO_0005 --big-tables # inclui log_eventos e threads _tN
 """
 
 import sys
