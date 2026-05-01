@@ -136,7 +136,15 @@ def _descobrir_tabelas_com_bytea(cfg: dict, schema: str = "public") -> list:
         )
         return _TABELAS_FIXAS
 
-console = Console()
+# Força UTF-8 no Windows para evitar UnicodeEncodeError com Rich (caracteres ✓ ✗ █ ░)
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+console = Console(legacy_windows=False)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Conexão e configuração
@@ -367,7 +375,11 @@ def comparar_com_pk_sample(
     schema: str = "public",
 ) -> tuple[int, dict, list[dict], int]:
     """
-    Compara BLOB vs BYTEA por amostragem: primeiras N + N do meio + últimas N linhas.
+    Compara BLOB vs BYTEA por amostragem: primeiras N linhas do Firebird, buscadas
+    por PK no PostgreSQL.
+
+    Usa os PKs do Firebird para consultar o PostgreSQL (WHERE pk IN ...), evitando
+    falsos positivos por diferença de collation/ordenação entre os dois bancos.
 
     Retorna: (total_amostrado, stats_por_coluna, lista_de_divergências, total_real)
     """
@@ -390,46 +402,49 @@ def comparar_com_pk_sample(
         return 0, stats, [], 0
 
     n = min(n_sample, total_real)
-    mid_offset = max(0, total_real // 2 - n // 2)
-    end_offset = max(0, total_real - n)
 
-    def _fetch_pg_slice(offset: int, limit: int) -> dict:
-        cur_pg.execute(
-            f'SELECT {pk_pg}, {blob_pg} FROM {schema}."{pg_table}"'
-            f' ORDER BY {pk_pg} LIMIT %s OFFSET %s',
-            (limit, offset),
-        )
-        rows = {}
+    # Fase 1: busca primeiras N linhas do Firebird (evita SKIP caro no FB)
+    cur_fb.execute(f'SELECT FIRST {n} {pk_fb}, {blob_fb} FROM {fb_table} ORDER BY {pk_fb}')
+    fb_sample: dict = {}
+    for row in cur_fb.fetchall():
+        pk_val = tuple(row[:pk_len])
+        fb_sample[pk_val] = {col: md5_of(row[pk_len + i]) for i, col in enumerate(blob_cols)}
+
+    # Fase 2: busca no PostgreSQL apenas as linhas com os PKs do Firebird.
+    # Evita falso positivo por collation diferente (ORDER BY independente selecionaria
+    # conjuntos distintos quando a ordenação difere entre os dois bancos).
+    pg_sample: dict = {}
+    if fb_sample:
+        pk_tuples = list(fb_sample.keys())
+        if pk_len == 1:
+            pk_list = [pk[0] for pk in pk_tuples]
+            cur_pg.execute(
+                f'SELECT {pk_pg}, {blob_pg} FROM {schema}."{pg_table}"'
+                f' WHERE "{pk_cols[0]}" = ANY(%s)',
+                (pk_list,),
+            )
+        else:
+            # PK composta: (pk1, pk2) IN ((%s,%s), (%s,%s), ...)
+            row_expr  = "(" + ", ".join(f'"{c}"' for c in pk_cols) + ")"
+            row_ph    = "(" + ", ".join(["%s"] * pk_len) + ")"
+            in_clause = ", ".join([row_ph] * len(pk_tuples))
+            flat_vals = [v for pk in pk_tuples for v in pk]
+            cur_pg.execute(
+                f'SELECT {pk_pg}, {blob_pg} FROM {schema}."{pg_table}"'
+                f' WHERE {row_expr} IN ({in_clause})',
+                flat_vals,
+            )
         for row in cur_pg.fetchall():
             pk_val = tuple(row[:pk_len])
-            rows[pk_val] = {col: md5_of(row[pk_len + i]) for i, col in enumerate(blob_cols)}
-        return rows
-
-    def _fetch_fb_slice(offset: int, limit: int) -> dict:
-        cur_fb.execute(
-            f'SELECT FIRST {limit} SKIP {offset} {pk_fb}, {blob_fb} FROM {fb_table} ORDER BY {pk_fb}'
-        )
-        rows = {}
-        for row in cur_fb.fetchall():
-            pk_val = tuple(row[:pk_len])
-            rows[pk_val] = {col: md5_of(row[pk_len + i]) for i, col in enumerate(blob_cols)}
-        return rows
-
-    # Coleta as 3 fatias
-    pg_sample: dict = {}
-    fb_sample: dict = {}
-    for offset in {0, mid_offset, end_offset}:
-        pg_sample.update(_fetch_pg_slice(offset, n))
-        fb_sample.update(_fetch_fb_slice(offset, n))
+            pg_sample[pk_val] = {col: md5_of(row[pk_len + i]) for i, col in enumerate(blob_cols)}
 
     # Compara
     stats  = {col: {"ok": 0, "diff": 0, "only_fb": 0, "only_pg": 0, "both_null": 0}
               for col in blob_cols}
     errors: list[dict] = []
-    pg_remaining = dict(pg_sample)
 
     for pk_val, fb_row in fb_sample.items():
-        pg_row = pg_remaining.pop(pk_val, None)
+        pg_row = pg_sample.get(pk_val)
         for i, col in enumerate(blob_cols):
             hash_fb = fb_row[col]
             hash_pg = pg_row[col] if pg_row is not None else None
@@ -444,11 +459,6 @@ def comparar_com_pk_sample(
                 if len(errors) < 20:
                     errors.append({"col": col, "pk": pk_val,
                                    "hash_fb": hash_fb, "hash_pg": hash_pg})
-
-    for pk_val, pg_row in pg_remaining.items():
-        for col in blob_cols:
-            if pg_row[col] is not None:
-                stats[col]["only_pg"] += 1
 
     total_amostrado = len(fb_sample)
     return total_amostrado, stats, errors, total_real
@@ -584,6 +594,7 @@ def print_table_result_with_pk(pg_table: str, pk_cols: list, blob_cols: list,
     t.add_column("Só FB",          style="yellow",justify="right")
     t.add_column("Só PG",          style="yellow",justify="right")
     t.add_column("Ambos NULL",     style="dim",   justify="right")
+    t.add_column("Total",          style="dim",   justify="right")
     t.add_column("Status",         justify="center")
 
     all_ok = True
@@ -600,6 +611,7 @@ def print_table_result_with_pk(pg_table: str, pk_cols: list, blob_cols: list,
         if not col_ok:
             all_ok = False
 
+        total_col = ok + diff + only_f + only_p + null_b
         t.add_row(
             col,
             str(ok),
@@ -607,6 +619,7 @@ def print_table_result_with_pk(pg_table: str, pk_cols: list, blob_cols: list,
             str(only_f) if only_f else "[dim]0[/dim]",
             str(only_p) if only_p else "[dim]0[/dim]",
             str(null_b) if null_b else "[dim]0[/dim]",
+            str(total_col),
             status,
         )
 
@@ -660,8 +673,9 @@ def print_final_summary(results: list[dict], elapsed: float):
               header_style="bold white on dark_blue", padding=(0, 2), expand=True)
     t.add_column("Tabela",           style="cyan",   no_wrap=True)
     t.add_column("Colunas BYTEA",    justify="right")
-    t.add_column("Linhas verif.",     justify="right")
+    t.add_column("Linhas verif.",    justify="right")
     t.add_column("Divergências",     justify="right")
+    t.add_column("Col. divergente",  style="yellow", no_wrap=False)
     t.add_column("Resultado",        justify="center")
 
     total_ok   = 0
@@ -677,11 +691,21 @@ def print_final_summary(results: list[dict], elapsed: float):
         else:
             total_fail += 1
 
+        # Identifica colunas com problema (diff, only_fb ou only_pg > 0)
+        col_divergente = ""
+        if not r["ok"] and r.get("stats"):
+            cols_fail = [
+                col for col, s in r["stats"].items()
+                if s.get("diff", 0) > 0 or s.get("only_fb", 0) > 0 or s.get("only_pg", 0) > 0
+            ]
+            col_divergente = ", ".join(cols_fail) if cols_fail else "—"
+
         t.add_row(
             r["tabela"],
             str(r["n_colunas"]),
             rows,
             f"[red]{divs}[/red]" if r.get("divergencias") else "[dim]0[/dim]",
+            col_divergente,
             ok_icon,
         )
 
@@ -716,6 +740,12 @@ def print_final_summary(results: list[dict], elapsed: float):
 # Programa principal
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _barra_progresso(concluidas: int, total: int, largura: int = 20) -> str:
+    preenchido = int(largura * concluidas / total) if total else 0
+    pct = 100 * concluidas // total if total else 0
+    return f"{'█' * preenchido}{'░' * (largura - preenchido)} {pct}% ({concluidas}/{total})"
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Verifica checksums BLOB vs BYTEA após migração")
     p.add_argument("--config", default="config.yaml", help="Arquivo de configuração")
@@ -724,8 +754,8 @@ def parse_args():
     p.add_argument("--schema",  default="public", help="Schema PostgreSQL (padrão: public)")
     p.add_argument("--workers", type=int, default=10,
                    help="Tabelas em paralelo (padrão: 10 = todas simultâneas; use 1 para sequencial)")
-    p.add_argument("--sample", type=int, default=0, metavar="N",
-                   help="Amostragem: compara primeiras+meio+últimas N linhas por tabela (0=comparação completa)")
+    p.add_argument("--sample", type=int, default=1000, metavar="N",
+                   help="Amostragem: compara primeiras N linhas por tabela (padrão: 1000; 0=comparação completa)")
     return p.parse_args()
 
 
@@ -767,8 +797,11 @@ def main():
             sys.exit(1)
 
         results = []
+        total_tabelas = len(tabelas)
 
-        for fb_table, pg_table in tabelas:
+        for tab_idx, (fb_table, pg_table) in enumerate(tabelas, start=1):
+            barra_ini = _barra_progresso(tab_idx - 1, total_tabelas)
+            print(f"\n[{tab_idx}/{total_tabelas}] {pg_table}  {barra_ini}", flush=True)
             console.print(f"[dim]Analisando[/dim] [bold]{pg_table}[/bold]...", end=" ")
 
             blob_cols_fb  = get_blob_binary_columns_fb(conn_fb, fb_table)
@@ -783,7 +816,7 @@ def main():
                 results.append({
                     "tabela": pg_table, "ok": True,
                     "n_colunas": 0, "linhas": 0, "divergencias": 0,
-                    "nota": "sem colunas BLOB binário",
+                    "stats": None, "nota": "sem colunas BLOB binário",
                 })
                 continue
 
@@ -796,7 +829,7 @@ def main():
                 n_sample = args.sample
                 if n_sample > 0:
                     console.print(
-                        f"  [dim][AMOSTRA: primeiras/meio/últimas {n_sample} linhas][/dim]"
+                        f"  [dim][AMOSTRA: primeiras {n_sample} linhas][/dim]"
                     )
                     total, stats, errors, total_real = comparar_com_pk_sample(
                         conn_fb, conn_pg, fb_table, pg_table,
@@ -840,6 +873,7 @@ def main():
                     "n_colunas": len(shared_cols),
                     "linhas": total,
                     "divergencias": n_divs,
+                    "stats": stats,
                 })
             else:
                 stats    = comparar_sem_pk(conn_fb, conn_pg, fb_table, pg_table,
@@ -852,7 +886,12 @@ def main():
                     "n_colunas": len(shared_cols),
                     "linhas": None,
                     "divergencias": n_divs,
+                    "stats": stats,
                 })
+
+            status_icon = "OK" if results[-1]["ok"] else "ERRO"
+            barra_pos = _barra_progresso(tab_idx, total_tabelas)
+            print(f"  [{status_icon}] {pg_table}  {barra_pos}", flush=True)
 
         conn_fb.close()
         conn_pg.close()
@@ -872,7 +911,7 @@ def main():
         n_sample = args.sample
         if n_sample > 0:
             console.print(
-                f"[dim]Modo amostragem: primeiras/meio/últimas {n_sample} linhas por tabela[/dim]\n"
+                f"[dim]Modo amostragem: primeiras {n_sample} linhas por tabela[/dim]\n"
             )
 
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
@@ -896,18 +935,20 @@ def main():
                 ordered_results[idx] = res
                 with lock:
                     completed += 1
-                    status  = "[green]✓[/green]" if res["ok"] else "[red]✗[/red]"
+                    status  = "[green]✓ OK[/green]" if res["ok"] else "[red]✗ ERRO[/red]"
                     elapsed = res.get("elapsed", 0.0)
+                    barra   = _barra_progresso(completed, len(tabelas))
                     console.print(
-                        f"  {status} [cyan]{pg_table}[/cyan]  "
-                        f"[dim]{elapsed:.1f}s[/dim]  "
-                        f"[dim]({completed}/{len(tabelas)})[/dim]"
+                        f"  {status}  [cyan]{pg_table}[/cyan]  [dim]{elapsed:.1f}s[/dim]  "
+                        f"[bold cyan]{barra}[/bold cyan]"
                     )
 
         console.print()
 
-        # Exibe detalhes de cada tabela na ordem original, depois coleta results
+        # Coleta resultados e separa tabelas com falha para exibição detalhada
         results = []
+        n_ok_suprimidas = 0
+
         for res in ordered_results:
             pg_table  = res["tabela"]
             blob_cols = res.get("blob_cols") or []
@@ -916,40 +957,46 @@ def main():
             errors    = res.get("errors")    or []
 
             if res.get("error"):
-                console.print(
-                    f"[red]✗ {pg_table}:[/red] [dim]{res['error']}[/dim]\n"
-                )
                 results.append({
                     "tabela": pg_table, "ok": False,
                     "n_colunas": 0, "linhas": None, "divergencias": -1,
+                    "stats": None,
                 })
                 continue
 
             if not blob_cols:
-                console.print(
-                    f"[dim]{pg_table}: nenhuma coluna BLOB binário↔BYTEA — ignorada[/dim]"
-                )
                 results.append({
                     "tabela": pg_table, "ok": True,
                     "n_colunas": 0, "linhas": 0, "divergencias": 0,
-                    "nota": "sem colunas BLOB binário",
+                    "stats": None, "nota": "sem colunas BLOB binário",
                 })
+                n_ok_suprimidas += 1
                 continue
 
-            if pk_cols:
-                table_ok = print_table_result_with_pk(
-                    pg_table, pk_cols, blob_cols,
-                    res["linhas"], stats, errors,
-                )
+            if res["ok"]:
+                n_ok_suprimidas += 1
             else:
-                table_ok = print_table_result_no_pk(pg_table, blob_cols, stats)
+                # Exibe detalhe apenas de tabelas com divergências
+                if pk_cols:
+                    print_table_result_with_pk(
+                        pg_table, pk_cols, blob_cols,
+                        res["linhas"], stats, errors,
+                    )
+                else:
+                    print_table_result_no_pk(pg_table, blob_cols, stats)
 
             results.append({
-                "tabela": pg_table, "ok": table_ok,
+                "tabela": pg_table, "ok": res["ok"],
                 "n_colunas": res["n_colunas"],
                 "linhas": res.get("linhas"),
                 "divergencias": res["divergencias"],
+                "stats": stats,
             })
+
+        if n_ok_suprimidas:
+            console.print(
+                f"[dim]{n_ok_suprimidas} tabela(s) OK — detalhes suprimidos.[/dim]\n"
+            )
 
     elapsed = (datetime.now() - t_inicio).total_seconds()
     print_final_summary(results, elapsed)

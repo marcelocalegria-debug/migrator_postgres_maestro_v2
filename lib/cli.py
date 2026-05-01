@@ -494,7 +494,7 @@ class MaestroCLI:
 
         while True:
             try:
-                user_msg = self.session.prompt("Agente >> ").strip()
+                user_msg = self.session.prompt(f"AGENTE[{mig_dir.name}] >> ").strip()
                 if not user_msg:
                     continue
                 if user_msg.lower() in ('sair', 'voltar', 'exit', 'quit'):
@@ -507,7 +507,7 @@ class MaestroCLI:
                 if kind == "error":
                     self.console.print(f"[red]Erro no agente: {payload}[/red]")
                 else:
-                    self.console.print(f"\n[bold blue]AGENTE:[/bold blue]\n{payload}\n")
+                    self.console.print(f"\n[bold blue]AGENTE[{mig_dir.name}]:[/bold blue]\n{payload}\n")
             except KeyboardInterrupt:
                 break
             except Exception as e:

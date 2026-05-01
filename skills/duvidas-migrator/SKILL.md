@@ -132,12 +132,15 @@ Usadas pelo agente IA (`/agent`). Sempre usar o nome EXATO da ferramenta.
 
 | Ferramenta | Função |
 | :--- | :--- |
-| `get_firebird_table_count_safe(table_name)` | Conta linhas no Firebird (ReadOnly) |
-| `execute_readonly_sql_postgres(sql)` | SELECT no PostgreSQL (auditoria) |
-| `check_migration_logs(lines)` | Lê últimas linhas dos logs de migração |
-| `run_count_comparison()` | Executa `compara_cont_fb2pg.py` |
-| `generate_migration_report()` | Gera relatório HTML de estrutura |
-| `open_html_report()` | Abre o último relatório HTML gerado |
+| `execute_firebird_sql(sql)` | SELECT no Firebird (ReadOnly, máx 100 linhas) |
+| `execute_postgres_sql(sql)` | SELECT no PostgreSQL (ReadOnly, timeout 30s, máx 100 linhas) |
+| `check_migration_logs(lines, filter_error)` | Lê logs de migração — filtra erros por padrão |
+| `list_migration_projects()` | Lista diretórios MIGRACAO_* existentes |
+| `query_migration_db(sql, project)` | SELECT no migration.db (controle SQLite, máx 200 linhas) |
+| `update_migration_db(sql, project)` | UPDATE controlado no migration.db (WHERE obrigatório) |
+
+> Para gerar relatório HTML execute manualmente:
+> `python gera_relatorio_compara_estrutura_fb2pg_html.py --work-dir MIGRACAO_NNNN`
 
 ## 7. Pipeline Completo (Referência)
 

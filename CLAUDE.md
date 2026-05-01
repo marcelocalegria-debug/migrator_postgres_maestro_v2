@@ -80,7 +80,7 @@ python monitor.py MIGRACAO_0005 --small-tables
 
 ### MCP Server
 
-`mcps/db_migration_server.py` is a FastMCP server that exposes read-only tools for both Firebird and PostgreSQL, plus migration utilities (`run_count_comparison`, `generate_migration_report`, `check_migration_logs`). It is consumed by `lib/ai/agent.py` via `StdioConnectionParams` (stdio transport, not HTTP). Do not add `print()` calls to this file — stdout is reserved for MCP's stdio protocol.
+`mcps/db_migration_server.py` is a FastMCP server that exposes quatro ferramentas somente-leitura: `execute_firebird_sql`, `execute_postgres_sql`, `check_migration_logs`, `list_migration_projects`. It is consumed by `lib/ai/agent.py` via `StdioConnectionParams` (stdio transport, not HTTP). Do not add `print()` calls to this file — stdout is reserved for MCP's stdio protocol.
 
 ### Skills (Agent Guardrails)
 

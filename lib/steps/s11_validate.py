@@ -1,7 +1,6 @@
 import sys
 import subprocess
 from pathlib import Path
-from rich.prompt import Confirm
 from .base import StepBase
 
 class ValidateStep(StepBase):
@@ -27,7 +26,8 @@ class ValidateStep(StepBase):
         # 2. Comparação de Checksums (colunas binárias)
         print("\n[2/2] Validando integridade de dados (Checksums)...")
         
-        if not Confirm.ask("Deseja realizar a validação de Checksum MD5 (BLOB vs BYTEA)?", default=False):
+        resp = input("Deseja realizar a validação de Checksum MD5 (BLOB vs BYTEA)? (s/N): ").strip().lower()
+        if resp != 's':
             print("[INFO] Validação de checksum ignorada pelo usuário.")
             return True
 
@@ -36,32 +36,34 @@ class ValidateStep(StepBase):
         # Executa PosMigracao_comparaChecksum_bytea.py para as tabelas principais
         cmd = [
             sys.executable, 'PosMigracao_comparaChecksum_bytea.py',
-            '--config', str(config_path.absolute())
+            '--config', str(config_path.absolute()),
+            '--sample', '1000',
         ]
         
+        log_path = mig_dir / "logs" / "validate_checksums.log"
+        returncode = 0
         try:
-            process = subprocess.run(
-                cmd, capture_output=True, text=True, check=False
-            )
-            
-            output = process.stdout
-            print(output)
-            
-            # Salva log
-            log_path = mig_dir / "logs" / "validate_checksums.log"
-            with open(log_path, 'w', encoding='utf-8') as f:
-                f.write(output)
-                if process.stderr:
-                    f.write("\n--- STDERR ---\n")
-                    f.write(process.stderr)
-
-            if process.returncode != 0:
-                print("[WARNING] Diferenças de checksum encontradas!")
-                return True # Retorna True pois a validação foi EXECUTADA, mesmo com falhas de dados
-            
-            print("[OK] Checksums batem perfeitamente.")
-            return True
-            
+            with open(log_path, 'w', encoding='utf-8') as log_f:
+                with subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    bufsize=1,
+                ) as proc:
+                    for line in proc.stdout:
+                        print(line, end='', flush=True)
+                        log_f.write(line)
+                    proc.wait()
+                    returncode = proc.returncode
         except Exception as e:
             print(f"[ERROR] Erro ao executar validação: {str(e)}")
             return False
+
+        if returncode != 0:
+            print("[WARNING] Diferenças de checksum encontradas!")
+        else:
+            print("[OK] Checksums batem perfeitamente.")
+        return True
