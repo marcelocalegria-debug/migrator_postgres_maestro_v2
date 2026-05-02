@@ -283,6 +283,16 @@ def md5_of(data) -> str | None:
     return hashlib.md5(data).hexdigest()
 
 
+def _pk_tuple(row, pk_len: int) -> tuple:
+    """Normaliza PK removendo trailing spaces de colunas CHAR(n).
+
+    psycopg2 retorna CHAR(n) com padding de espaços (ex: 'E  ') enquanto fdb
+    retorna o mesmo valor sem espaços (ex: 'E'). Sem normalização o dict lookup
+    falha e a linha é contabilizada como 'Só FB' mesmo estando presente no PG.
+    """
+    return tuple(v.rstrip() if isinstance(v, str) else v for v in row[:pk_len])
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Comparação de tabela COM chave primária
 # ──────────────────────────────────────────────────────────────────────────────
@@ -316,7 +326,7 @@ def comparar_com_pk(
     pg_hashes: dict[tuple, dict[str, str | None]] = {}
     pk_len = len(pk_cols)
     for row in cur_pg:
-        pk_val = tuple(row[:pk_len])
+        pk_val = _pk_tuple(row, pk_len)
         pg_hashes[pk_val] = {
             col: md5_of(row[pk_len + i])
             for i, col in enumerate(blob_cols)
@@ -331,7 +341,7 @@ def comparar_com_pk(
     compared = 0
 
     for row in cur_fb:
-        pk_val    = tuple(row[:pk_len])
+        pk_val    = _pk_tuple(row, pk_len)
         pg_row    = pg_hashes.pop(pk_val, None)
         compared += 1
 
@@ -406,36 +416,56 @@ def comparar_com_pk_sample(
     # Fase 1: busca primeiras N linhas do Firebird (evita SKIP caro no FB)
     cur_fb.execute(f'SELECT FIRST {n} {pk_fb}, {blob_fb} FROM {fb_table} ORDER BY {pk_fb}')
     fb_sample: dict = {}
+    pk_tuples_raw: list = []  # valores brutos do FB (sem strip) para o IN clause do PG
     for row in cur_fb.fetchall():
-        pk_val = tuple(row[:pk_len])
+        pk_raw = tuple(row[:pk_len])          # bruto, sem strip — usado no WHERE do PG
+        pk_val = _pk_tuple(row, pk_len)       # stripado — chave do dict de comparação
         fb_sample[pk_val] = {col: md5_of(row[pk_len + i]) for i, col in enumerate(blob_cols)}
+        pk_tuples_raw.append(pk_raw)
 
     # Fase 2: busca no PostgreSQL apenas as linhas com os PKs do Firebird.
+    # Usa os valores BRUTOS do FB (sem rstrip) no IN clause para que PKs com trailing
+    # spaces em colunas VARCHAR do PG sejam encontrados corretamente. O rstrip é
+    # aplicado depois, ao construir pg_sample, via _pk_tuple.
     # Evita falso positivo por collation diferente (ORDER BY independente selecionaria
     # conjuntos distintos quando a ordenação difere entre os dois bancos).
     pg_sample: dict = {}
     if fb_sample:
-        pk_tuples = list(fb_sample.keys())
-        if pk_len == 1:
-            pk_list = [pk[0] for pk in pk_tuples]
-            cur_pg.execute(
-                f'SELECT {pk_pg}, {blob_pg} FROM {schema}."{pg_table}"'
-                f' WHERE "{pk_cols[0]}" = ANY(%s)',
-                (pk_list,),
-            )
-        else:
-            # PK composta: (pk1, pk2) IN ((%s,%s), (%s,%s), ...)
-            row_expr  = "(" + ", ".join(f'"{c}"' for c in pk_cols) + ")"
-            row_ph    = "(" + ", ".join(["%s"] * pk_len) + ")"
-            in_clause = ", ".join([row_ph] * len(pk_tuples))
-            flat_vals = [v for pk in pk_tuples for v in pk]
-            cur_pg.execute(
-                f'SELECT {pk_pg}, {blob_pg} FROM {schema}."{pg_table}"'
-                f' WHERE {row_expr} IN ({in_clause})',
-                flat_vals,
-            )
-        for row in cur_pg.fetchall():
-            pk_val = tuple(row[:pk_len])
+        pk_tuples = pk_tuples_raw  # brutos para a query PG
+
+        # PostgreSQL não armazena \x00 em colunas text — PKs com NUL bytes do Firebird
+        # não têm correspondente no PG e causam ValueError no psycopg2.
+        valid_pk_tuples = []
+        for pk in pk_tuples:
+            if any(isinstance(v, str) and '\x00' in v for v in pk):
+                fb_sample.pop(_pk_tuple(pk, pk_len), None)
+            else:
+                valid_pk_tuples.append(pk)
+
+        rows_pg = []
+        if valid_pk_tuples:
+            if pk_len == 1:
+                pk_list = [pk[0] for pk in valid_pk_tuples]
+                cur_pg.execute(
+                    f'SELECT {pk_pg}, {blob_pg} FROM {schema}."{pg_table}"'
+                    f' WHERE "{pk_cols[0]}" = ANY(%s)',
+                    (pk_list,),
+                )
+            else:
+                # PK composta: (pk1, pk2) IN ((%s,%s), (%s,%s), ...)
+                row_expr  = "(" + ", ".join(f'"{c}"' for c in pk_cols) + ")"
+                row_ph    = "(" + ", ".join(["%s"] * pk_len) + ")"
+                in_clause = ", ".join([row_ph] * len(valid_pk_tuples))
+                flat_vals = [v for pk in valid_pk_tuples for v in pk]
+                cur_pg.execute(
+                    f'SELECT {pk_pg}, {blob_pg} FROM {schema}."{pg_table}"'
+                    f' WHERE {row_expr} IN ({in_clause})',
+                    flat_vals,
+                )
+            rows_pg = cur_pg.fetchall()
+
+        for row in rows_pg:
+            pk_val = _pk_tuple(row, pk_len)
             pg_sample[pk_val] = {col: md5_of(row[pk_len + i]) for i, col in enumerate(blob_cols)}
 
     # Compara
@@ -590,7 +620,7 @@ def print_table_result_with_pk(pg_table: str, pk_cols: list, blob_cols: list,
               padding=(0, 1), expand=False)
     t.add_column("Coluna BYTEA",   style="cyan",  no_wrap=True)
     t.add_column("OK",             style="green", justify="right")
-    t.add_column("Divergentes",    style="red",   justify="right")
+    t.add_column("Divergentes",    style="red",   justify="right", min_width=10)
     t.add_column("Só FB",          style="yellow",justify="right")
     t.add_column("Só PG",          style="yellow",justify="right")
     t.add_column("Ambos NULL",     style="dim",   justify="right")
@@ -670,13 +700,12 @@ def print_final_summary(results: list[dict], elapsed: float):
     console.print()
 
     t = Table(box=box.DOUBLE_EDGE, show_header=True,
-              header_style="bold white on dark_blue", padding=(0, 2), expand=True)
-    t.add_column("Tabela",           style="cyan",   no_wrap=True)
-    t.add_column("Colunas BYTEA",    justify="right")
-    t.add_column("Linhas verif.",    justify="right")
-    t.add_column("Divergências",     justify="right")
-    t.add_column("Col. divergente",  style="yellow", no_wrap=False)
-    t.add_column("Resultado",        justify="center")
+              header_style="bold white on dark_blue", padding=(0, 1), expand=False)
+    t.add_column("Tabela",    style="cyan",  no_wrap=True)
+    t.add_column("Cols",      justify="right", min_width=4)
+    t.add_column("Linhas",    justify="right", min_width=9)
+    t.add_column("Diverg.",   justify="right", min_width=6)
+    t.add_column("Resultado", justify="center", min_width=9)
 
     total_ok   = 0
     total_fail = 0
@@ -691,21 +720,11 @@ def print_final_summary(results: list[dict], elapsed: float):
         else:
             total_fail += 1
 
-        # Identifica colunas com problema (diff, only_fb ou only_pg > 0)
-        col_divergente = ""
-        if not r["ok"] and r.get("stats"):
-            cols_fail = [
-                col for col, s in r["stats"].items()
-                if s.get("diff", 0) > 0 or s.get("only_fb", 0) > 0 or s.get("only_pg", 0) > 0
-            ]
-            col_divergente = ", ".join(cols_fail) if cols_fail else "—"
-
         t.add_row(
             r["tabela"],
             str(r["n_colunas"]),
             rows,
             f"[red]{divs}[/red]" if r.get("divergencias") else "[dim]0[/dim]",
-            col_divergente,
             ok_icon,
         )
 
