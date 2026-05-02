@@ -6,3 +6,5 @@ dist/
 wheels/
 testes/
 OLD/
+*.tar.gz
+*.zip

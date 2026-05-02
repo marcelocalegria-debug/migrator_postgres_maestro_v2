@@ -25,3 +25,5 @@ config.yaml.C6_EQUINIX
 *.json
 *.DOCKER
 *.html
+*.tar.gz
+*.zip

@@ -1,9 +1,27 @@
 #!/usr/bin/env python3
 """
-Repara constraint_state_*.json e enable_constraints_*.sql que foram gerados
-com FKs compostas duplicadas (bug de produto cartesiano no JOIN kcu×ccu).
+repair_fk_scripts.py
+====================
+Utilitário de emergência — não é chamado pelo Maestro, sem argparse.
 
-Usa o Firebird como fonte autoritativa das definições de FK.
+Repara constraint_state_*.json e enable_constraints_*.sql gerados com FKs
+compostas duplicadas (bug de produto cartesiano no JOIN kcu×ccu do pg_catalog).
+
+Quando usar:
+  - Se enable_constraints.py falhar com colunas duplicadas em ADD CONSTRAINT FK
+  - Se o constraint_state_*.json contiver colunas repetidas em foreign_key_own/child
+
+Como funciona:
+  - Lê todos os constraint_state_*.json e enable_constraints_*.sql da pasta raiz
+  - Consulta o Firebird como fonte autoritativa das colunas corretas de cada FK
+  - Reescreve os arquivos com as colunas deduplicadas
+
+ATENÇÃO: os parâmetros de conexão Firebird (FB_PARAMS) são hardcoded neste
+arquivo — edite-os antes de executar se o ambiente for diferente do padrão:
+  host=localhost, port=3050, database=/firebird/data/c6emb.fdb, user=SYSDBA
+
+Uso:
+    python repair_fk_scripts.py
 """
 
 import json

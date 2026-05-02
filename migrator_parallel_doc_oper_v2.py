@@ -698,13 +698,16 @@ Observabilidade:
     ap.add_argument('-c', '--config', default=None, help='Arquivo de configuração YAML (padrão: work-dir/config.yaml)')
     ap.add_argument('-t', '--threads', type=int, default=4, metavar='N',
                     help='Número de threads paralelas (padrão: 4)')
-    ap.add_argument('--master-db', type=str, default=None)
-    ap.add_argument('--migration-id', type=int, default=None)
+    ap.add_argument('--master-db', type=str, default=None,
+                    help='migration.db do Maestro para progresso integrado ao monitor')
+    ap.add_argument('--migration-id', type=int, default=None,
+                    help='ID da migração no master-db')
     ap.add_argument('--reset', action='store_true',
                     help='Descarta todos os checkpoints e reinicia do zero')
     ap.add_argument('--dry-run', action='store_true',
                     help='Mostra contagens e ranges sem escrever dados')
-    ap.add_argument('--batch-size', type=int, default=None)
+    ap.add_argument('--batch-size', type=int, default=None,
+                    help='Linhas por batch COPY (padrão: lido do config.yaml)')
     ap.add_argument('--use-insert', action='store_true',
                     help='Usa INSERT em vez de COPY')
     ap.add_argument('--generate-scripts-only', action='store_true',

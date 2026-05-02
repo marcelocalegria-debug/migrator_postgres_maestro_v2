@@ -316,7 +316,8 @@ def main():
     ap.add_argument('session', help='Pasta da sessão (ex: MIGRACAO_0005)')
     ap.add_argument('--big-tables', action='store_true', help='Foca nas 10 big tables')
     ap.add_argument('--small-tables', action='store_true', help='Modo progresso global small tables')
-    ap.add_argument('-i', '--interval', type=float, default=2.0)
+    ap.add_argument('-i', '--interval', type=float, default=2.0,
+                    help='Intervalo de atualização em segundos (padrão: 2.0)')
     args = ap.parse_args()
 
     session_path = Path(args.session)

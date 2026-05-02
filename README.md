@@ -299,6 +299,15 @@ python enable_constraints.py --report log.txt      # grava relatório em arquivo
 psql -h HOST -U USER -d DB -f MIGRACAO_0005/sql/enable_constraints_TABELA.sql
 ```
 
+### Reparo de FKs compostas (utilitário de emergência)
+
+```bash
+# Usar se enable_constraints.py falhar com colunas duplicadas em ADD CONSTRAINT FK
+# (bug de produto cartesiano em constraint_state_*.json / enable_constraints_*.sql)
+# ATENÇÃO: edite FB_PARAMS no arquivo antes de executar (host, database, user, password)
+python repair_fk_scripts.py
+```
+
 ### Processos órfãos (após Ctrl+C)
 
 ```bash

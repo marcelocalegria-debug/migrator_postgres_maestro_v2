@@ -1,15 +1,20 @@
 """
 pg_constraints.py
 =================
-Gerencia constraints, PKs, índices e triggers de uma tabela PostgreSQL
-para otimizar cargas em massa.
+Módulo biblioteca — não é executável diretamente.
+Importado por S05 (disable_constraints) e S08 (enable_constraints) do Maestro V2.
 
-Correções nesta versão:
-  - FK query JOIN corrigido (constraint_schema em vez de unique_constraint_schema)
-  - Removida referência a função inexistente _cfg_val
-  - Ordem de re-enable correta incluindo UNIQUE
-  - Autocommit gerenciado corretamente em disable_all/enable_all
-  - ANALYZE após recriação de índices/PK
+Expõe a classe ConstraintManager que gerencia o ciclo de vida de constraints,
+PKs, índices e triggers de tabelas PostgreSQL para otimizar cargas em massa.
+
+Fluxo típico (gerenciado pelo Maestro):
+  1. S05: ConstraintManager.disable_all()  — salva estado em JSON, executa DROP
+  2. S06/S07: carga de dados via COPY
+  3. S08: ConstraintManager.enable_all()   — recria na ordem: index → PK → unique
+                                             → check → FK own → FK child → trigger
+
+Queries via pg_catalog (não information_schema) para evitar produto cartesiano
+em FKs compostas.
 """
 
 import json

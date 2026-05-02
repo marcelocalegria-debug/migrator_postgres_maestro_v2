@@ -6,7 +6,8 @@ Migra as tabelas pequenas do Firebird 3 -> PostgreSQL via ProcessPoolExecutor.
 Auto-descobre tabelas não listadas em exclude_tables no config.yaml (~901 tabelas).
 Checkpoint/restart: tabelas já concluídas são puladas automaticamente.
 
-Chamado pelo Maestro V2 (S07) ou diretamente como standalone.
+Chamado pelo Maestro V2 (S06 e S07) ou diretamente como standalone.
+S06/S07 passam: --config --small-tables --master-db --migration-id --work-dir --workers
 
 Uso:
     python migrator_smalltables_v2.py --work-dir MIGRACAO_0001 --small-tables
@@ -454,9 +455,12 @@ def main():
     p.add_argument('-c', '--config', default=None, help='Caminho do config.yaml (padrão: work-dir/config.yaml)')
     p.add_argument('--small-tables', action='store_true', help='Migra todas as tabelas (exceto exclude)')
     p.add_argument('--table', type=str, help='Migra apenas UMA tabela específica')
-    p.add_argument('--master-db', type=str)
-    p.add_argument('--migration-id', type=int)
-    p.add_argument('--workers', type=int, default=None)
+    p.add_argument('--master-db', type=str,
+                   help='migration.db do Maestro para progresso integrado ao monitor')
+    p.add_argument('--migration-id', type=int,
+                   help='ID da migração no master-db')
+    p.add_argument('--workers', type=int, default=None,
+                   help='Workers ProcessPoolExecutor (padrão: lido do config.yaml)')
     args = p.parse_args()
 
     # Define config padrão baseado no work-dir se não for informado

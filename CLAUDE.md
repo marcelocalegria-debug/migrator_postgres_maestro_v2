@@ -51,7 +51,7 @@ Steps run in order: S00 precheck → S01 create DB → S02 import schema → S03
 | `migrator_v2.py` | Sequential, checkpoint/restart | Any table via `--work-dir` + `--table` (required) |
 | `migrator_parallel_doc_oper_v2.py` | ThreadPoolExecutor, PK range partitioning | DOCUMENTO_OPERACAO (largest, composite PK) |
 | `migrator_log_eventos_v2.py` | ThreadPoolExecutor, RDB$DB_KEY partitioning | LOG_EVENTOS (no PK) |
-| `migrator_smalltables_v2.py` | ProcessPoolExecutor, auto-discovery | ~901 small tables (excludes 10 big ones) |
+| `migrator_smalltables_v2.py` | ProcessPoolExecutor, auto-discovery | ~901 small tables (excludes 10 big ones) — chamado por S06 e S07 |
 
 All migrators share: checkpoint to SQLite, COPY protocol insertion, sub-batch retry on error, `MigrationProgress` dataclass for state serialization.
 

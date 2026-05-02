@@ -114,6 +114,10 @@ python PosMigracao_comparaChecksum_bytea.py --workers 1 --sample 1000
 # Relatório HTML
 python gera_relatorio_compara_estrutura_fb2pg_html.py --work-dir MIGRACAO_0001
 python gera_relatorio_compara_estrutura_fb2pg_html.py --work-dir MIGRACAO_0001 --output relatorio.html
+
+# DDL de correção de schema (gerado automaticamente pelo S03, mas executável standalone)
+python gera_ddl_correcao_schema.py --work-dir MIGRACAO_0001
+# Exit codes: 0=correções geradas, 1=schemas idênticos, 2=só diferenças manuais (sem SQL gerado)
 ```
 
 ## 5. Re-enable de Constraints (Emergência)
@@ -125,6 +129,17 @@ python enable_constraints.py -t operacao_credito       # apenas uma tabela (repe
 python enable_constraints.py --fail-fast               # para ao primeiro erro
 python enable_constraints.py --report relatorio.txt    # grava relatório em arquivo
 ```
+
+## 5b. Utilitários de Emergência
+
+```bash
+# Repara FKs compostas com colunas duplicadas nos arquivos JSON/SQL gerados
+# (bug de produto cartesiano em constraint_state_*.json / enable_constraints_*.sql)
+# ATENÇÃO: parâmetros de conexão Firebird são hardcoded no arquivo — edite FB_PARAMS antes de usar
+python repair_fk_scripts.py
+```
+
+> `pg_constraints.py` é módulo biblioteca (importado por S05/S08) — não é executável diretamente.
 
 ## 6. Ferramentas MCP (via db_migration_server.py)
 

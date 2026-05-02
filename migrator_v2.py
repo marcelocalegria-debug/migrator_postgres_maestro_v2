@@ -5,9 +5,10 @@ migrator_v2.py
 Migra uma tabela do Firebird 3 -> PostgreSQL 18 com checkpoint/restart.
 COPY protocol, sub-batching automático, paginação por PK ou RDB$DB_KEY.
 
-Chamado pelo Maestro V2 (S06/S07) ou diretamente como standalone.
+Chamado pelo Maestro V2 (S06) ou diretamente como standalone.
+S06 passa: --table --config --master-db --migration-id --work-dir
 
-Uso:
+Uso standalone:
     python migrator_v2.py --work-dir MIGRACAO_0001 --table OPERACAO_CREDITO
     python migrator_v2.py --work-dir MIGRACAO_0001 --table OPERACAO_CREDITO --reset
     python migrator_v2.py --work-dir MIGRACAO_0001 --table OPERACAO_CREDITO --dry-run
@@ -15,7 +16,7 @@ Uso:
 
 Parâmetros:
     --work-dir DIR       Diretório da migração, ex: MIGRACAO_0001 (obrigatório)
-    --table TABELA       Nome da tabela no Firebird (UPPERCASE)
+    --table TABELA       Nome da tabela no Firebird (UPPERCASE); obrigatório exceto em --dry-run
     --config PATH        config.yaml alternativo (padrão: work-dir/config.yaml)
     --reset              Apaga checkpoint e reinicia do zero
     --dry-run            Conecta e lê do Firebird mas não grava no PostgreSQL
@@ -945,12 +946,18 @@ def main():
     p = argparse.ArgumentParser(description='Migra Firebird 3 -> PostgreSQL')
     p.add_argument('--work-dir', type=str, required=True, help='Diretório da migração (ex: MIGRACAO_0001)')
     p.add_argument('-c', '--config', default=None, help='Caminho do config.yaml (padrão: work-dir/config.yaml)')
-    p.add_argument('--table', type=str, default=None)
-    p.add_argument('--master-db', type=str, default=None)
-    p.add_argument('--migration-id', type=int, default=None)
-    p.add_argument('--reset', action='store_true')
-    p.add_argument('--dry-run', action='store_true')
-    p.add_argument('--use-insert', action='store_true')
+    p.add_argument('--table', type=str, default=None,
+                   help='Nome da tabela no Firebird (UPPERCASE); obrigatório exceto em --dry-run')
+    p.add_argument('--master-db', type=str, default=None,
+                   help='migration.db do Maestro para progresso integrado ao monitor')
+    p.add_argument('--migration-id', type=int, default=None,
+                   help='ID da migração no master-db')
+    p.add_argument('--reset', action='store_true',
+                   help='Apaga checkpoint e reinicia do zero')
+    p.add_argument('--dry-run', action='store_true',
+                   help='Conecta e lê do Firebird mas não grava no PostgreSQL')
+    p.add_argument('--use-insert', action='store_true',
+                   help='Usa INSERT em vez de COPY (3–5× mais lento)')
     args = p.parse_args()
 
     # Define config padrão baseado no work-dir se não for informado

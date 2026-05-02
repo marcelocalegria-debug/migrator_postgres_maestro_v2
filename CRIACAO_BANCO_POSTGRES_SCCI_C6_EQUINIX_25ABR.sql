@@ -61,7 +61,7 @@ CREATE DATABASE c6_producao
 ALTER DATABASE c6_producao SET default_tablespace TO 'tbs_c6_producao';
 
 
-COMMENT ON DATABASE c6_producao IS 'Banco XXXXX para sistema SCCI  ';
+COMMENT ON DATABASE c6_producao IS 'Banco C6 para sistema SCCI  ';
 
 GRANT ALL PRIVILEGES ON DATABASE c6_producao TO "c6_producao_user";
 
@@ -105,3 +105,11 @@ ALTER USER c6_producao_user with superuser;
 -- teste conexao
 psql -h localhost -p 5432 -U "c6_producao_user" -d c6_producao 
 
+
+
+-- gerar zip do instalador linux
+
+tar -czvf migracao_maestro_v2_02mai2026_install.tar.gz \
+    --exclude='__pycache__' \
+    --exclude='*.pyc' \
+    /migracao_maestro_v2
