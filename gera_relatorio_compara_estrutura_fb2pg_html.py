@@ -16,7 +16,9 @@ Parâmetros:
 """
 
 import argparse
+import json as _json_db
 import os
+import sqlite3 as _sqlite3
 import sys
 import html as _html
 from pathlib import Path
@@ -285,11 +287,14 @@ HTML_TEMPLATE = """
                 <div class="stat-label">Só PostgreSQL</div>
                 <div class="stat-value warning">{only_pg_count}</div>
             </div>
+            {sequences_stat}
         </div>
-        
+
         <div class="content">
+            {sequences_section}
+
             {issues_section}
-            
+
             {perfect_section}
         </div>
         
@@ -330,9 +335,9 @@ HTML_TEMPLATE = """
 """
 
 
-def generate_html_report(results, only_fb, only_pg, output_path):
+def generate_html_report(results, only_fb, only_pg, output_path, seq_data=None):
     """Gera relatório HTML completo."""
-    
+
     total = len(results)
     perfect = sum(1 for r in results if all([
         r['count_ok'], r['pk_ok'], r['fk_ok'], r['idx_ok'], r['uniq_ok'], r['check_ok']
@@ -444,9 +449,63 @@ def generate_html_report(results, only_fb, only_pg, output_path):
         </div>
         '''
     
+    # Seção de sequences
+    if seq_data:
+        total_gen = seq_data.get('total_generators', 0)
+        ok_seq = seq_data.get('sequences_ok', 0)
+        fail_seq = seq_data.get('sequences_failed', 0)
+        failed_names = seq_data.get('failed_sequences', [])
+        sql_path = seq_data.get('sql_script_path', '')
+
+        if total_gen > 0 and ok_seq == total_gen:
+            seq_color = 'success'
+        elif fail_seq > 0:
+            seq_color = 'error'
+        else:
+            seq_color = 'warning'
+
+        sequences_stat = f'''
+            <div class="stat-card">
+                <div class="stat-label">Sequences Ajustadas</div>
+                <div class="stat-value {seq_color}">{ok_seq}/{total_gen}</div>
+            </div>'''
+
+        failed_html = ''
+        if failed_names:
+            items = ''.join(f'<li class="issue-item">{_html.escape(n)}</li>' for n in failed_names)
+            failed_html = f'<ul class="issue-list" style="margin-top:12px;">{items}</ul>'
+
+        sequences_section = f'''
+        <div class="section">
+            <div class="section-title">🔢 Sequences (Generators Firebird → PostgreSQL)</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:20px;">
+                <div class="stat-card">
+                    <div class="stat-label">Total Generators</div>
+                    <div class="stat-value">{total_gen}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Ajustadas OK</div>
+                    <div class="stat-value {seq_color}">{ok_seq}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Com Falha</div>
+                    <div class="stat-value {'error' if fail_seq else 'success'}">{fail_seq}</div>
+                </div>
+            </div>
+            {failed_html}
+            <p style="margin-top:12px;color:#64748b;font-size:0.9em;">
+                Script de auditoria: <code>{_html.escape(sql_path)}</code>
+            </p>
+        </div>'''
+    else:
+        sequences_stat = ''
+        sequences_section = ''
+
     # Gerar HTML final
     html = HTML_TEMPLATE.format(
         **stats,
+        sequences_stat=sequences_stat,
+        sequences_section=sequences_section,
         issues_section=issues_html,
         perfect_section=perfect_html
     )
@@ -522,8 +581,24 @@ def main():
     fb_conn.close()
     pg_conn.close()
 
+    # Tenta ler dados de sequences do migration.db (Maestro V2)
+    seq_data = None
+    db_path = work_dir / 'migration.db'
+    if db_path.exists():
+        try:
+            conn_db = _sqlite3.connect(str(db_path))
+            row = conn_db.execute(
+                "SELECT details_json FROM steps WHERE step_name='SEQUENCES' "
+                "AND status='completed' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            conn_db.close()
+            if row and row[0]:
+                seq_data = _json_db.loads(row[0])
+        except Exception:
+            pass
+
     print('Gerando relatório HTML...')
-    generate_html_report(results, only_fb, only_pg, output_path)
+    generate_html_report(results, only_fb, only_pg, output_path, seq_data=seq_data)
 
 
 if __name__ == '__main__':

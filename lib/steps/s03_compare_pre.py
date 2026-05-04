@@ -211,8 +211,9 @@ class ComparePreStep(StepBase):
             
             if process.stdout:
                 for line in process.stdout:
-                    print(line, end='', flush=True)
-                    full_output.append(line)
+                    if '[WARNING-TIPO]' not in line:
+                        print(line, end='', flush=True)
+                    full_output.append(line)  # log recebe tudo
             
             process.wait()
             output = "".join(full_output)
@@ -237,10 +238,50 @@ class ComparePreStep(StepBase):
 
                 print("[WARNING] Diferenças encontradas na estrutura.")
 
+                # Detecta tabelas só no FB para warning explícito de perda de dados
+                _fb_only_block = False
+                _fb_only_names = []
+                for _ln in full_output:
+                    _c = _strip_ansi(_ln).strip()
+                    if "Tabelas somente no FIREBIRD" in _c or "só no FIREBIRD" in _c:
+                        _fb_only_block = True
+                        continue
+                    if _fb_only_block:
+                        if _c.startswith("- "):
+                            _fb_only_names.append(_c[2:].strip())
+                        elif _c and not _c.startswith("-"):
+                            _fb_only_block = False
+
+                if _fb_only_names:
+                    print("\n" + "!" * 62)
+                    print("  ATENCAO: TABELAS FALTANDO NO POSTGRESQL")
+                    print("  As seguintes tabelas existem no Firebird mas NAO")
+                    print("  estao no PostgreSQL — os dados NAO serao migrados:")
+                    for _t in _fb_only_names:
+                        print(f"    - {_t}")
+                    print("!" * 62 + "\n")
+
+                # Auto-gera DDL de correção antes do menu para o DBA ver os scripts disponíveis
+                _cmd_ddl_auto = [
+                    sys.executable, 'gera_ddl_correcao_schema.py',
+                    '--work-dir', str(mig_dir.absolute()),
+                ]
+                try:
+                    _proc_ddl = subprocess.Popen(
+                        _cmd_ddl_auto, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, bufsize=1, encoding='utf-8', errors='replace'
+                    )
+                    if _proc_ddl.stdout:
+                        for _line in _proc_ddl.stdout:
+                            print(_line, end='', flush=True)
+                    _proc_ddl.wait()
+                except Exception as _e:
+                    print(f"[WARNING] Falha ao gerar DDL automático: {_e}")
+
                 print("\nO que deseja fazer?")
-                print("  [1] Se você já aplicou o script de colunas gerado acima, fazer nova comparação e gerar DDL das diferenças estruturais (recomendado)")
+                print("  [1] Apliquei os scripts acima. Verificar novamente e gerar novo DDL (recomendado)")
                 print("  [2] Analisar as diferenças com o Agente ADK (IA) para receber sugestões de correção")
-                print("  [3] Continuar com a migração")
+                print("  [3] Continuar MESMO COM tabelas faltando no PG (dados dessas tabelas serao PERDIDOS)")
                 print("  [4] Sair (corrigir manualmente e usar /rerun 3)")
                 opcao = input("\nEscolha [1/2/3/4] (default=1): ").strip() or "1"
 
@@ -276,7 +317,7 @@ class ComparePreStep(StepBase):
                     MAX_DIFF_CHARS = 8000
                     diff_lines = diff_context.strip().split('\n')
                     interesting = [l for l in diff_lines if any(
-                        kw in l for kw in ['DIFERENTE', 'AUSENTE', 'FK-', 'ERRO', 'WARNING', 'FALTANDO']
+                        kw in l for kw in ['DIFERENTE', 'AUSENTE', 'FK-', 'ERRO', 'FALTANDO']
                     )]
                     diff_context_filtrado = '\n'.join(interesting) if interesting else '\n'.join(diff_lines)
                     if len(diff_context_filtrado) > MAX_DIFF_CHARS:
@@ -285,13 +326,15 @@ class ComparePreStep(StepBase):
                             + f"\n\n[... truncado em {MAX_DIFF_CHARS} chars — log completo em {log_path.name} ...]"
                         )
 
-                    user_input = f"""Foram encontradas diferenças na estrutura entre Firebird e Postgres durante a fase PRÉ-MIGRAÇÃO.
-Analise as diferenças abaixo e gere um script SQL corretivo (ALTER TABLE) para aplicar no Postgres.
+                    user_input = f"""Foram encontradas diferenças na estrutura entre Firebird e Postgres durante PRÉ-MIGRAÇÃO.
+Gere um script SQL corretivo para aplicar no Postgres.
 
-REQUISITOS DO SCRIPT:
-1. Gere o script passo a passo.
-2. Para cada ajuste, inclua uma explicação detalhada em formato de comentário SQL (-- ou /* ... */).
-3. O foco são apenas as diferenças em tabelas que já existem no destino.
+REGRAS:
+1. Para FK-RULES (ON UPDATE/ON DELETE divergentes): gere DROP CONSTRAINT IF EXISTS + ADD CONSTRAINT com as regras corretas do Firebird.
+2. Para colunas faltando: gere ALTER TABLE ADD COLUMN.
+3. Inclua comentário explicativo (-- ) antes de cada bloco.
+4. Foco apenas em tabelas que já existem no destino.
+5. NUNCA gere ALTER COLUMN TYPE.
 
 DIFERENÇAS:
 {diff_context_filtrado}

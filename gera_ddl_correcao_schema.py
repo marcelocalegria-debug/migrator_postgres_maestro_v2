@@ -24,6 +24,7 @@ Exit codes:
 
 import argparse
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -295,6 +296,34 @@ def _gen_fk_ddl(table: str, conname: str, info: dict) -> str:
     )
 
 
+def _extract_create_table_from_schema(schema_path: Path, table_name: str) -> str | None:
+    """Extrai o bloco CREATE TABLE de schema.sql para uma tabela específica."""
+    if not schema_path.exists():
+        return None
+    try:
+        lines = schema_path.read_text(encoding='utf-8').splitlines()
+        target = table_name.lower()
+        i = 0
+        while i < len(lines):
+            stripped = lines[i].strip().lower()
+            if re.match(rf'create\s+table\s+"?{re.escape(target)}"?\s*\(', stripped):
+                block = [lines[i]]
+                depth = lines[i].count('(') - lines[i].count(')')
+                i += 1
+                while i < len(lines) and depth > 0:
+                    block.append(lines[i])
+                    depth += lines[i].count('(') - lines[i].count(')')
+                    i += 1
+                result = '\n'.join(block).rstrip()
+                if not result.endswith(';'):
+                    result += ';'
+                return result
+            i += 1
+    except Exception:
+        pass
+    return None
+
+
 # ─── Lógica principal ─────────────────────────────────────────────────────────
 
 def generate_ddl(cfg: dict, work_dir: Path, schema: str) -> int:
@@ -415,13 +444,25 @@ def generate_ddl(cfg: dict, work_dir: Path, schema: str) -> int:
     fb_conn.close()
     pg_conn.close()
 
-    # Tabelas só em um lado → manual
+    # Tabelas só no FB → extrai CREATE TABLE do schema.sql; só no PG → manual
+    schema_sql_path = work_dir / "schema.sql"
+    tabelas_fb_extraidas = 0
     for t in only_fb_tables:
-        manual_lines.append(f"-- MANUAL: tabela '{t}' só existe no Firebird (ver schema.sql para DDL CREATE TABLE)")
+        ddl_block = _extract_create_table_from_schema(schema_sql_path, t)
+        if ddl_block:
+            auto_stmts.append(
+                f"-- [TABELA SÓ NO FB] Criar tabela '{t}' ausente no PostgreSQL\n{ddl_block}"
+            )
+            tabelas_fb_extraidas += 1
+        else:
+            manual_lines.append(
+                f"-- MANUAL: tabela '{t}' só existe no Firebird "
+                f"(DDL não encontrado em schema.sql — criar manualmente)"
+            )
     for t in only_pg_tables:
         manual_lines.append(f"-- MANUAL: tabela '{t}' só existe no PostgreSQL (verificar se deve ser removida)")
 
-    total_auto   = sum(counts.values())
+    total_auto   = sum(counts.values()) + tabelas_fb_extraidas
     total_manual = len(manual_lines)
 
     if total_auto == 0 and total_manual == 0:
@@ -441,6 +482,7 @@ def generate_ddl(cfg: dict, work_dir: Path, schema: str) -> int:
         f.write(f"-- Migração: {work_dir.name}\n")
         f.write(f"-- FK-RULES: {counts['fk_rules']} | FK add: {counts['fk_add']} | FK drop: {counts['fk_drop']}\n")
         f.write(f"-- IDX add: {counts['idx_add']} | IDX drop: {counts['idx_drop']}\n")
+        f.write(f"-- Tabelas FB-only (CREATE TABLE): {tabelas_fb_extraidas}\n")
         f.write(f"-- Itens manuais (comentados): {total_manual}\n")
         f.write(f"-- ============================================================\n\n")
 
@@ -456,6 +498,10 @@ def generate_ddl(cfg: dict, work_dir: Path, schema: str) -> int:
 
     print(f"\n[DDL] FK-RULES corrigidas: {counts['fk_rules']} | FK add: {counts['fk_add']} | FK drop: {counts['fk_drop']}")
     print(f"[DDL] IDX add: {counts['idx_add']} | IDX drop: {counts['idx_drop']}")
+    if tabelas_fb_extraidas:
+        print(f"[DDL] Tabelas FB-only com CREATE TABLE extraído: {tabelas_fb_extraidas}")
+    elif only_fb_tables:
+        print(f"[DDL] Tabelas FB-only sem DDL em schema.sql (manual): {len(only_fb_tables)}")
     print(f"[DDL] Itens manuais (comentados): {total_manual}")
     print(f"[DDL] Total de correções automáticas: {total_auto}")
     # Linha especial para o Maestro capturar o caminho do arquivo

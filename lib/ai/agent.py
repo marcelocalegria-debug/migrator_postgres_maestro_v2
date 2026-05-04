@@ -164,9 +164,8 @@ PROJETO ATUAL: {self.project_path.name}
 REGRAS CRÍTICAS DE SAÍDA:
 1. RESPONDA APENAS O RESULTADO. PROIBIDO EXPLICAR O QUE VAI FAZER.
 2. PROIBIDO "PENSAR ALTO" (Ex: "The user wants...", "Let me...").
-3. MÁXIMO DE 3 LINHAS.
-4. Use tabelas para dados.
-5. Se falhar, diga apenas "ERRO: [motivo curto]".
+3. Use tabelas para dados.
+4. Se falhar, diga apenas "ERRO: [motivo curto]".
 
 CONTEXTO:
 {skills_context}

@@ -11,8 +11,28 @@ class PrecheckStep(StepBase):
 
     def run(self) -> bool:
         print("--- Iniciando Precheck ---")
+
+        # Confirmação dos bancos de origem e destino antes de qualquer check
+        fb = self.config.firebird
+        pg = self.config.postgres
+        print("\n" + "=" * 60)
+        print("  BANCOS DE DADOS — CONFIRME ANTES DE PROSSEGUIR")
+        print("=" * 60)
+        print(f"  ORIGEM  (Firebird):   host={fb.get('host')}  "
+              f"db={fb.get('database')}  user={fb.get('user')}")
+        print(f"  DESTINO (PostgreSQL): host={pg.get('host')}  "
+              f"port={pg.get('port', 5432)}  db={pg.get('database')}  user={pg.get('user')}")
+        print("=" * 60)
+        mig_seq = self.db.get_migration(self.migration_id)['seq']
+        print(f"\n  Config: MIGRACAO_{mig_seq}/config.yaml")
+        confirma = input("\nOs bancos estão corretos? (s/N): ").strip().lower()
+        if confirma != 's':
+            print("[INFO] Operação cancelada. Edite o config.yaml na pasta da migração e re-execute.")
+            return False
+        print()
+
         success = True
-        
+
         # 1. Verifica Versão Python
         if sys.version_info < (3, 13):
             print(f"[ERROR] Python 3.13+ requerido. Versão atual: {sys.version}")

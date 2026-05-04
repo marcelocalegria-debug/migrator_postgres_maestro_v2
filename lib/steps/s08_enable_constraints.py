@@ -18,10 +18,25 @@ class EnableConstraintsStep(StepBase):
                 print("[WARNING] Nenhuma constraint encontrada para reabilitar.")
                 return True
 
+            # Resumo numérico — sempre exibido, mesmo quando não há nada a fazer
+            total = len(constraints_db)
+            by_status = {}
+            by_type = {}
+            for c in constraints_db:
+                by_status[c['status']] = by_status.get(c['status'], 0) + 1
+                by_type[c['constraint_type']] = by_type.get(c['constraint_type'], 0) + 1
+            print(f"Constraints registradas: {total}")
+            print("  Por status:")
+            for status, count in sorted(by_status.items()):
+                print(f"    {status:10}: {count}")
+            print("  Por tipo:")
+            for ctype, count in sorted(by_type.items()):
+                print(f"    {ctype:20}: {count}")
+
             # Filtra apenas as que precisam ser habilitadas
             to_enable = [c for c in constraints_db if c['status'] in ('disabled', 'failed')]
             if not to_enable:
-                print("[OK] Todas as constraints já estão habilitadas.")
+                print("[OK] Nenhuma constraint precisa ser habilitada (todas já estão 'enabled').")
                 return True
 
             # 2. Conecta ao PostgreSQL
@@ -84,6 +99,15 @@ class EnableConstraintsStep(StepBase):
             conn.close()
             
             print(f"[OK] Processo concluído: {total_ok} sucessos, {total_fail} falhas.")
+            if total_fail > 0:
+                # Recarrega contagem final para confirmar estado pós-execução
+                final = self.db.list_constraints(self.migration_id)
+                final_by_status = {}
+                for c in final:
+                    final_by_status[c['status']] = final_by_status.get(c['status'], 0) + 1
+                print("  Estado final por status:")
+                for status, count in sorted(final_by_status.items()):
+                    print(f"    {status:10}: {count}")
             return total_fail == 0 # Sucesso do step se não houver falhas
             
         except Exception as e:

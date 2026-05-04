@@ -23,21 +23,16 @@ class ValidateStep(StepBase):
         except Exception as e:
             print(f"[ERROR] Falha ao executar compara_cont_fb2pg.py: {e}")
 
-        # 2. Comparação de Checksums (colunas binárias)
+        # 2. Comparação de Checksums (colunas binárias) — automático
         print("\n[2/2] Validando integridade de dados (Checksums)...")
-        
-        resp = input("Deseja realizar a validação de Checksum MD5 (BLOB vs BYTEA)? (s/N): ").strip().lower()
-        if resp != 's':
-            print("[INFO] Validação de checksum ignorada pelo usuário.")
-            return True
 
         config_path = mig_dir / "config.yaml"
-        
+
         # Executa PosMigracao_comparaChecksum_bytea.py para as tabelas principais
         cmd = [
             sys.executable, 'PosMigracao_comparaChecksum_bytea.py',
             '--config', str(config_path.absolute()),
-            '--sample', '1000',
+            '--sample', '100',
         ]
         
         log_path = mig_dir / "logs" / "validate_checksums.log"

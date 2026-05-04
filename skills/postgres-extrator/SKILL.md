@@ -26,6 +26,40 @@ Você deve utilizar primordialmente o cliente de linha de comando `psql`.
 2. **Conversão de Tipos e Estruturas:**
    - Converta `GENERATORS` ou campos `SERIAL` legados para o padrão moderno: `GENERATED ALWAYS AS IDENTITY`.
    - Mapeie tipos específicos adequadamente (ex: `VARCHAR` no lugar de limites arbitrários de texto, `TIMESTAMP WITH TIME ZONE` para datas, `BOOLEAN` nativo em vez de `CHAR(1)` com 'S'/'N').
+   - Tabela estática de mapeamento de tipos:
+
+   ┌─────────────────────────┬──────────────────┬─────────────────────────────┐
+   │ Tipo Firebird (código)  │     Nome FB      │ Tipo PostgreSQL resultante  │
+   ├─────────────────────────┼──────────────────┼─────────────────────────────┤
+   │ 7 (sem subtype 1/2)     │ SMALLINT         │ smallint                    │
+   ├─────────────────────────┼──────────────────┼─────────────────────────────┤
+   │ 8 (sem subtype 1/2)     │ INTEGER          │ integer                     │
+   ├─────────────────────────┼──────────────────┼─────────────────────────────┤
+   │ 16 (sem subtype 1/2)    │ BIGINT           │ bigint                      │
+   ├─────────────────────────┼──────────────────┼─────────────────────────────┤
+   │ 7/8/16 (subtype 1 ou 2) │ NUMERIC/DECIMAL  │ numeric(prec,scale)         │
+   ├─────────────────────────┼──────────────────┼─────────────────────────────┤
+   │ 10                      │ FLOAT            │ real                        │
+   ├─────────────────────────┼──────────────────┼─────────────────────────────┤
+   │ 27                      │ DOUBLE PRECISION │ double precision            │
+   ├─────────────────────────┼──────────────────┼─────────────────────────────┤
+   │ 12                      │ DATE             │ date                        │
+   ├─────────────────────────┼──────────────────┼─────────────────────────────┤
+   │ 13                      │ TIME             │ time without time zone      │
+   ├─────────────────────────┼──────────────────┼─────────────────────────────┤
+   │ 35                      │ TIMESTAMP        │ timestamp without time zone │
+   ├─────────────────────────┼──────────────────┼─────────────────────────────┤
+   │ 14                      │ CHAR(n)          │ character(n)                │
+   ├─────────────────────────┼──────────────────┼─────────────────────────────┤
+   │ 37                      │ VARCHAR(n)       │ character varying(n)        │
+   ├─────────────────────────┼──────────────────┼─────────────────────────────┤
+   │ 261 subtype=1           │ BLOB TEXT        │ text                        │
+   ├─────────────────────────┼──────────────────┼─────────────────────────────┤
+   │ 261 subtype≠1           │ BLOB BINARY      │ bytea                       │
+   ├─────────────────────────┼──────────────────┼─────────────────────────────┤
+   │ 23                      │ BOOLEAN          │ boolean                     │
+   └─────────────────────────┴──────────────────┴─────────────────────────────┘
+
 3. **Performance de Carga (Migração):** - Ao importar grandes volumes de dados, NÃO utilize milhares de comandos `INSERT`. 
    - Instrua a geração de arquivos `.csv` da origem e utilize o comando meta do psql `\copy`:
      `\copy nome_da_tabela FROM 'dados.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');`

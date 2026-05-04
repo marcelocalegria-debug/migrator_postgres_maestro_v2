@@ -15,7 +15,7 @@ Detectei diferenças de estrutura entre o Firebird (Origem) e o PostgreSQL (Dest
 Contexto do Diff:
 {diff_context}
 
-Por favor, gere os comandos SQL (ALTER TABLE, etc.) necessários para sincronizar o PostgreSQL com o Firebird, 
+Por favor, gere TODOS os comandos SQL (ALTER TABLE, etc.) necessários para sincronizar o PostgreSQL com o Firebird, 
 mantendo a compatibilidade de tipos. Retorne apenas o SQL.
 """
 
