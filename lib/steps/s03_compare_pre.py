@@ -196,7 +196,8 @@ class ComparePreStep(StepBase):
         cmd = [
             sys.executable, 'compara_estrutura_fb2pg.py',
             '--work-dir', str(mig_dir.absolute()),
-            '--skip-count'
+            '--skip-count',
+            '--sem-avisos-tela',
         ]
         
         print(f"[DEBUG] Executando comando: {' '.join(cmd)}")

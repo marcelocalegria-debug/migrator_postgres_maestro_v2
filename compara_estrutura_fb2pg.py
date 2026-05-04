@@ -905,7 +905,7 @@ def _compare_structure(fb_conn, pg_conn, schema: str, table_key: str,
 
 # ─── Relatórios ───────────────────────────────────────────────────────────────
 
-def _print_summary_plain(results: List[dict], only_fb: List[str], only_pg: List[str]):
+def _print_summary_plain(results: List[dict], only_fb: List[str], only_pg: List[str], show_warnings: bool = True):
     """Relatório resumido em texto plano."""
     print()
     print('=' * 100)
@@ -965,7 +965,7 @@ def _print_summary_plain(results: List[dict], only_fb: List[str], only_pg: List[
                 print(f'      {issue}')
 
     # Avisos informativos (apenas WARNING-TIPO)
-    if warnings_only:
+    if warnings_only and show_warnings:
         print(f'\n  AVISOS (compatíveis — sem ação necessária):')
         print('  ' + '-' * 96)
         for r in warnings_only:
@@ -976,7 +976,7 @@ def _print_summary_plain(results: List[dict], only_fb: List[str], only_pg: List[
     print()
 
 
-def _print_summary_rich(results: List[dict], only_fb: List[str], only_pg: List[str]):
+def _print_summary_rich(results: List[dict], only_fb: List[str], only_pg: List[str], show_warnings: bool = True):
     """Relatório resumido com Rich."""
     total = len(results)
     perfect = sum(1 for r in results if all([
@@ -1034,7 +1034,7 @@ def _print_summary_rich(results: List[dict], only_fb: List[str], only_pg: List[s
                 console.print(f'  [dim]• {rich_escape(issue)}[/]', soft_wrap=True)
 
     # ─── Avisos informativos (apenas WARNING-TIPO) ───────────────────
-    if warnings_only:
+    if warnings_only and show_warnings:
         console.print()
         console.print(Panel.fit(
             f'[bold yellow]{len(warnings_only)} TABELAS COM AVISOS (compatível — sem ação)[/]',
@@ -1173,6 +1173,7 @@ def main():
     parser.add_argument('--schema', default=None, help='Schema PostgreSQL (default: lido do config)')
     parser.add_argument('--verbose', action='store_true', help='Mostrar progresso detalhado')
     parser.add_argument('--skip-count', action='store_true', help='Pular a comparação de contagem de registros')
+    parser.add_argument('--sem-avisos-tela', action='store_true', help='Suprime seção WARNING-TIPO na tela (apenas relatório HTML)')
     args = parser.parse_args()
 
     work_dir = Path(args.work_dir)
@@ -1246,10 +1247,11 @@ def main():
 
     print('\nGerando relatório...')
 
+    show_warnings = not args.sem_avisos_tela
     if HAS_RICH:
-        _print_summary_rich(results, only_fb, only_pg)
+        _print_summary_rich(results, only_fb, only_pg, show_warnings=show_warnings)
     else:
-        _print_summary_plain(results, only_fb, only_pg)
+        _print_summary_plain(results, only_fb, only_pg, show_warnings=show_warnings)
 
     # ─── SQL de correções de colunas ──────────────────────────────────
     if _SQL_OUTPUT:
