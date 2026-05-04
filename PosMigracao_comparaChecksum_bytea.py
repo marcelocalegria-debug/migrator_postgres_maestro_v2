@@ -29,6 +29,7 @@ import os
 import sys
 import hashlib
 import argparse
+import shutil
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -144,7 +145,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-console = Console(legacy_windows=False)
+console = Console(legacy_windows=False, width=max(shutil.get_terminal_size((160, 40)).columns, 160))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Conexão e configuração
@@ -303,7 +304,7 @@ def comparar_com_pk(
     pk_cols: list[str], blob_cols: list[str],
     schema: str = "public",
     progress=None, task=None,
-) -> tuple[int, dict, list[dict]]:
+) -> tuple[int, dict, list[dict], list[tuple]]:
     """
     Compara BLOB vs BYTEA linha a linha usando a PK como chave de join.
 
@@ -311,7 +312,7 @@ def comparar_com_pk(
       1. Carrega todos os hashes do PostgreSQL em um dict {pk_tuple: {col: md5}}
       2. Itera o Firebird e compara contra o dict
 
-    Retorna: (total_linhas_comparadas, stats_por_coluna, lista_de_divergências)
+    Retorna: (total_linhas_comparadas, stats_por_coluna, lista_de_divergências, pks_só_fb)
     """
     cur_pg = conn_pg.cursor()
     cur_fb = conn_fb.cursor()
@@ -337,7 +338,8 @@ def comparar_com_pk(
 
     stats   = {col: {"ok": 0, "diff": 0, "only_fb": 0, "only_pg": 0, "both_null": 0}
                for col in blob_cols}
-    errors  = []
+    errors        = []
+    only_fb_pks: list[tuple] = []
     compared = 0
 
     for row in cur_fb:
@@ -347,6 +349,9 @@ def comparar_com_pk(
 
         if progress and task is not None:
             progress.advance(task)
+
+        if pg_row is None and len(only_fb_pks) < 20:
+            only_fb_pks.append(pk_val)
 
         for i, col in enumerate(blob_cols):
             hash_fb = md5_of(row[pk_len + i])
@@ -370,7 +375,7 @@ def comparar_com_pk(
             if pg_row[col] is not None:
                 stats[col]["only_pg"] += 1
 
-    return compared, stats, errors
+    return compared, stats, errors, only_fb_pks
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -570,10 +575,11 @@ def _run_one_table(cfg: dict, fb_table: str, pg_table: str, schema: str,
                     )
                     result["total_real"] = total_real
                 else:
-                    total, stats, errors = comparar_com_pk(
+                    total, stats, errors, only_fb_pks = comparar_com_pk(
                         conn_fb, conn_pg, fb_table, pg_table,
                         pk_cols, shared_cols, schema,
                     )
+                    result["only_fb_pks"] = only_fb_pks
                 n_divs = sum(s["diff"] + s["only_fb"] + s["only_pg"]
                              for s in stats.values())
                 result.update(ok=n_divs == 0, linhas=total,
@@ -612,7 +618,8 @@ def print_header():
 
 
 def print_table_result_with_pk(pg_table: str, pk_cols: list, blob_cols: list,
-                                total: int, stats: dict, errors: list):
+                                total: int, stats: dict, errors: list,
+                                only_fb_pks: list | None = None):
     """Exibe resultado de tabela com PK em formato de tabela Rich."""
     console.print(Rule(f"[bold]{pg_table}[/bold]  [dim](PK: {', '.join(pk_cols)})[/dim]"))
 
@@ -620,12 +627,12 @@ def print_table_result_with_pk(pg_table: str, pk_cols: list, blob_cols: list,
               padding=(0, 1), expand=False)
     t.add_column("Coluna BYTEA",   style="cyan",  no_wrap=True)
     t.add_column("OK",             style="green", justify="right")
-    t.add_column("Divergentes",    style="red",   justify="right", min_width=10)
+    t.add_column("Divergentes",    style="red",   justify="right", min_width=8)
     t.add_column("Só FB",          style="yellow",justify="right")
     t.add_column("Só PG",          style="yellow",justify="right")
     t.add_column("Ambos NULL",     style="dim",   justify="right")
     t.add_column("Total",          style="dim",   justify="right")
-    t.add_column("Status",         justify="center")
+    t.add_column("Status",         justify="center", min_width=8, no_wrap=True)
 
     all_ok = True
     for col in blob_cols:
@@ -665,6 +672,17 @@ def print_table_result_with_pk(pg_table: str, pk_cols: list, blob_cols: list,
                 f"    [dim]FB:[/dim] {e['hash_fb']}\n"
                 f"    [dim]PG:[/dim] {e['hash_pg']}"
             )
+
+    if only_fb_pks:
+        pk_label = ", ".join(pk_cols)
+        console.print(
+            f"\n  [yellow]Linhas presentes no Firebird mas ausentes no PostgreSQL "
+            f"({len(only_fb_pks)} de até 20 exibidas — PK: {pk_label}):[/yellow]"
+        )
+        for pk in only_fb_pks:
+            vals = ", ".join(f"{k}={v!r}" for k, v in zip(pk_cols, pk))
+            console.print(f"    [dim]→[/dim] {vals}")
+
     console.print()
     return all_ok
 
@@ -678,7 +696,7 @@ def print_table_result_no_pk(pg_table: str, blob_cols: list, stats: dict):
     t.add_column("Coluna BYTEA", style="cyan", no_wrap=True)
     t.add_column("Qtd FB",       justify="right")
     t.add_column("Qtd PG",       justify="right")
-    t.add_column("Status",       justify="center")
+    t.add_column("Status",       justify="center", min_width=12, no_wrap=True)
 
     all_ok = True
     for col in blob_cols:
@@ -845,7 +863,8 @@ def main():
             n_divs  = 0
 
             if pk_cols:
-                n_sample = args.sample
+                n_sample    = args.sample
+                only_fb_pks: list[tuple] = []
                 if n_sample > 0:
                     console.print(
                         f"  [dim][AMOSTRA: primeiras {n_sample} linhas][/dim]"
@@ -876,14 +895,15 @@ def main():
                         task = progress.add_task(
                             f"  Comparando {pg_table}", total=total_fb
                         )
-                        total, stats, errors = comparar_com_pk(
+                        total, stats, errors, only_fb_pks = comparar_com_pk(
                             conn_fb, conn_pg, fb_table, pg_table,
                             pk_cols, shared_cols, schema,
                             progress=progress, task=task,
                         )
 
                 table_ok = print_table_result_with_pk(
-                    pg_table, pk_cols, shared_cols, total, stats, errors
+                    pg_table, pk_cols, shared_cols, total, stats, errors,
+                    only_fb_pks=only_fb_pks,
                 )
                 n_divs = sum(s["diff"] + s["only_fb"] + s["only_pg"]
                              for s in stats.values())
@@ -1000,6 +1020,7 @@ def main():
                     print_table_result_with_pk(
                         pg_table, pk_cols, blob_cols,
                         res["linhas"], stats, errors,
+                        only_fb_pks=res.get("only_fb_pks") or [],
                     )
                 else:
                     print_table_result_no_pk(pg_table, blob_cols, stats)

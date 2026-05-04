@@ -191,7 +191,7 @@ def execute_postgres_sql(sql: str) -> str:
 
     Usa audit_user/audit_password do config.yaml quando disponíveis; caso contrário,
     usa as credenciais principais. Aplica timeout de 30 segundos e limita o retorno
-    a 100 linhas. Rejeita qualquer comando que não contenha SELECT.
+    a 1200 linhas. Rejeita qualquer comando que não contenha SELECT.
 
     Args:
         sql: Instrução SELECT a executar. Apenas leitura é permitida.
@@ -204,9 +204,9 @@ def execute_postgres_sql(sql: str) -> str:
         # Define timeout de 30 segundos para a query do agente
         cur.execute("SET statement_timeout = '30s'")
         cur.execute(sql)
-        rows = cur.fetchmany(100)
+        rows = cur.fetchmany(1200)
         conn.close()
-        return f"Resultado (limitado a 100 linhas): {str(rows)}"
+        return f"Resultado (limitado a 1200 linhas): {str(rows)}"
     except Exception as e:
         return f"Erro ao executar SQL no Postgres ({type(e).__name__}): {e}"
 
@@ -216,7 +216,7 @@ def execute_firebird_sql(sql: str) -> str:
 
     Usa audit_user/audit_password do config.yaml quando disponíveis; caso contrário,
     usa as credenciais principais. Charset WIN1252 configurado automaticamente.
-    Limita o retorno a 100 linhas. Rejeita qualquer comando que não contenha SELECT.
+    Limita o retorno a 1200 linhas. Rejeita qualquer comando que não contenha SELECT.
 
     Args:
         sql: Instrução SELECT a executar. Apenas leitura é permitida.
@@ -229,9 +229,9 @@ def execute_firebird_sql(sql: str) -> str:
         # mas podemos usar a API do fdb se necessário. Por ora, limitamos o fetch.
         cur = conn.cursor()
         cur.execute(sql)
-        rows = cur.fetchmany(100)
+        rows = cur.fetchmany(1200)
         conn.close()
-        return f"Resultado (limitado a 100 linhas): {str(rows)}"
+        return f"Resultado (limitado a 1200 linhas): {str(rows)}"
     except Exception as e:
         return f"Erro ao executar SQL no Firebird ({type(e).__name__}): {e}"
 
