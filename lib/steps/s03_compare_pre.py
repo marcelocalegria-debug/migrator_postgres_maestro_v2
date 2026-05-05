@@ -282,7 +282,7 @@ class ComparePreStep(StepBase):
                 print("\nO que deseja fazer?")
                 print("  [1] Apliquei os scripts acima. Verificar novamente e gerar novo DDL (recomendado)")
                 print("  [2] Analisar as diferenças com o Agente ADK (IA) para receber sugestões de correção")
-                print("  [3] Continuar MESMO COM tabelas faltando no PG (dados dessas tabelas serao PERDIDOS)")
+                print("  [3] Ignorar e Continuar MESMO COM diferenças de estrutura entre o FB e o PG")
                 print("  [4] Sair (corrigir manualmente e usar /rerun 3)")
                 opcao = input("\nEscolha [1/2/3/4] (default=1): ").strip() or "1"
 

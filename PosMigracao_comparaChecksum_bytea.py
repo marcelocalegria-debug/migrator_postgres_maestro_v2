@@ -448,7 +448,7 @@ def comparar_com_pk_sample(
         rows_pg = []
         if valid_pk_tuples:
             if pk_len == 1:
-                pk_list = [_pk_tuple(pk, pk_len)[0] for pk in valid_pk_tuples]
+                pk_list = [pk[0] for pk in valid_pk_tuples]
                 cur_pg.execute(
                     f'SELECT {pk_pg}, {blob_pg} FROM {schema}."{pg_table}"'
                     f' WHERE "{pk_cols[0]}" = ANY(%s)',
@@ -459,7 +459,7 @@ def comparar_com_pk_sample(
                 row_expr  = "(" + ", ".join(f'"{c}"' for c in pk_cols) + ")"
                 row_ph    = "(" + ", ".join(["%s"] * pk_len) + ")"
                 in_clause = ", ".join([row_ph] * len(valid_pk_tuples))
-                flat_vals = [v for pk in (_pk_tuple(t, pk_len) for t in valid_pk_tuples) for v in pk]
+                flat_vals = [v for pk in valid_pk_tuples for v in pk]
                 cur_pg.execute(
                     f'SELECT {pk_pg}, {blob_pg} FROM {schema}."{pg_table}"'
                     f' WHERE {row_expr} IN ({in_clause})',

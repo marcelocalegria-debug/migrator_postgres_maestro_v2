@@ -524,7 +524,8 @@ def _worker_migrate_slice(args: tuple):
         is_restart = bool(saved and saved.status in ('running', 'paused', 'error') and saved.rows_migrated > 0)
         
         batch_size = config['migration'].get('batch_size', 5000)
-        total_rows = saved.total_rows if is_restart else total_rows_in_range
+        # Always use the freshly calculated partition size to ensure visual accuracy
+        total_rows = total_rows_in_range
         
         if not is_restart:
             state.reset()
@@ -743,7 +744,8 @@ Observabilidade:
     for db_path in worker_db_paths:
         if db_path.exists():
             try:
-                conn_c = sqlite3.connect(str(db_path))
+                conn_c = sqlite3.connect(str(db_path), timeout=3)
+                conn_c.execute('PRAGMA journal_mode=WAL') # Ensure WAL mode even on reads
                 row = conn_c.execute('SELECT progress_json FROM migration_state WHERE id=1').fetchone()
                 conn_c.close()
                 if row:
@@ -770,6 +772,16 @@ Observabilidade:
 
     log = _setup_main_logger(
         str(LOG_DIR / f'migration_{DEST_TABLE}_parallel.log'))
+
+    # Bloqueio de segurança contra mudança de threads sem --reset
+    import glob
+    existing_dbs = glob.glob(str(WORK_DIR / f'migration_state_{DEST_TABLE}_t*.db'))
+    if existing_dbs and len(existing_dbs) != args.threads and not args.reset and not args.dry_run:
+        print(f"\n[ERRO CRÍTICO] Foram encontrados {len(existing_dbs)} arquivos de checkpoint antigos, "
+              f"mas você solicitou {args.threads} threads.")
+        print("Mudar o número de threads altera o particionamento e causa inconsistência de dados.")
+        print("Por favor, use a flag --reset para recomeçar do zero com a nova contagem de threads.")
+        sys.exit(1)
 
     # Atualiza args para usar os valores detectados
     args.master_db = master_db
@@ -875,6 +887,7 @@ Observabilidade:
                 continue
             try:
                 conn = sqlite3.connect(str(db_path), timeout=3)
+                conn.execute('PRAGMA journal_mode=WAL') # Ensure WAL mode
                 row  = conn.execute(
                     'SELECT progress_json FROM migration_state WHERE id=1'
                 ).fetchone()
@@ -962,11 +975,14 @@ Observabilidade:
         shutdown_event=shutdown,
         total_rows=total_rows,
     )
-    aggregator.start()
 
     t_start = time.time()
+    # Inicia os processos PRIMEIRO para evitar deadlock no fork() com a thread agregadora
     for p in processes:
         p.start()
+
+    # Só então inicia a thread
+    aggregator.start()
 
     # Aguarda processos (timeout de 2h por worker)
     for p in processes:
@@ -990,6 +1006,7 @@ Observabilidade:
     for db_path in worker_db_paths:
         try:
             conn = sqlite3.connect(str(db_path))
+            conn.execute('PRAGMA journal_mode=WAL') # Ensure WAL mode
             row = conn.execute('SELECT progress_json FROM migration_state WHERE id=1').fetchone()
             conn.close()
             if row:

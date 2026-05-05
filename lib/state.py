@@ -109,6 +109,9 @@ class StateManager:
     def _init_local_db(self):
         """Inicializa o banco SQLite local legado."""
         conn = sqlite3.connect(self.db_path, timeout=10)
+        # Enable WAL mode for better concurrency and performance
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA synchronous=NORMAL')
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS migration_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
