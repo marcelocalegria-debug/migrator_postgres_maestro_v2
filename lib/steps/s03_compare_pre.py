@@ -295,6 +295,7 @@ class ComparePreStep(StepBase):
                     # None = usuário pediu IA, cai no bloco abaixo
                 elif opcao == "3":
                     print("[INFO] Continuando com possíveis discrepâncias.")
+                    print("[INFO] Step S03 será marcado como CONCLUÍDO. Pipeline prosseguirá para o próximo passo.")
                     return True
                 elif opcao == "4":
                     print("[INFO] Corrija manualmente e use /rerun 3 para re-executar este passo.")

@@ -12,8 +12,7 @@ export LC_ALL=C.UTF-8
 ```bash
 postgres@postgres-server-sp2:~$ sudo mkdir /migracao_maestro_v2
 postgres@postgres-server-sp2:~$ sudo chown -R postgres:postgres /migracao_maestro_v2
-postgres@postgres-server-sp2:~$ sudo chmod o+w -R postgres:postgres /migracao_maestro_v2
-postgres@postgres-server-sp2:~$ sudo chmod o+w -R /migracao_maestro_v2
+postgres@postgres-server-sp2:~$ sudo chmod -R o+w /migracao_maestro_v2
 ```
 
 > **CRÍTICO:** Instalar o python 3 SEPARADAMENTE do python do Linux!!!! CRÍTICO PARA NÃO CORROMPER O Python nativo do linux e quebrar o servidor Linux ***

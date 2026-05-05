@@ -44,12 +44,11 @@ class SequencesStep(StepBase):
         
         # Garante diretórios
         (mig_dir / "logs").mkdir(parents=True, exist_ok=True)
-        (mig_dir / "report").mkdir(parents=True, exist_ok=True)
         (mig_dir / "sql").mkdir(parents=True, exist_ok=True)
 
         output_sql_path = mig_dir / "sql" / "gen_sequences.sql"
         log_path = mig_dir / "logs" / "s09_sequences.log"
-        html_report_path = mig_dir / "report" / "s09_sequences_report.html"
+        html_report_path = mig_dir / "reports" / "s09_sequences_report.html"
 
         # Limpa log anterior se existir
         if log_path.exists():

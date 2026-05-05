@@ -429,19 +429,17 @@ def comparar_com_pk_sample(
         pk_tuples_raw.append(pk_raw)
 
     # Fase 2: busca no PostgreSQL apenas as linhas com os PKs do Firebird.
-    # Usa os valores BRUTOS do FB (sem rstrip) no IN clause para que PKs com trailing
-    # spaces em colunas VARCHAR do PG sejam encontrados corretamente. O rstrip é
-    # aplicado depois, ao construir pg_sample, via _pk_tuple.
+    # Aplica rstrip nos valores do WHERE clause pelo mesmo motivo de _pk_tuple:
+    # fdb retorna colunas CHAR(n) com trailing spaces ('E  ') enquanto o PG
+    # armazena/retorna sem ('E'). Sem normalização o WHERE = ANY falha para esses PKs.
     # Evita falso positivo por collation diferente (ORDER BY independente selecionaria
     # conjuntos distintos quando a ordenação difere entre os dois bancos).
     pg_sample: dict = {}
     if fb_sample:
-        pk_tuples = pk_tuples_raw  # brutos para a query PG
-
         # PostgreSQL não armazena \x00 em colunas text — PKs com NUL bytes do Firebird
         # não têm correspondente no PG e causam ValueError no psycopg2.
         valid_pk_tuples = []
-        for pk in pk_tuples:
+        for pk in pk_tuples_raw:
             if any(isinstance(v, str) and '\x00' in v for v in pk):
                 fb_sample.pop(_pk_tuple(pk, pk_len), None)
             else:
@@ -450,7 +448,7 @@ def comparar_com_pk_sample(
         rows_pg = []
         if valid_pk_tuples:
             if pk_len == 1:
-                pk_list = [pk[0] for pk in valid_pk_tuples]
+                pk_list = [_pk_tuple(pk, pk_len)[0] for pk in valid_pk_tuples]
                 cur_pg.execute(
                     f'SELECT {pk_pg}, {blob_pg} FROM {schema}."{pg_table}"'
                     f' WHERE "{pk_cols[0]}" = ANY(%s)',
@@ -461,7 +459,7 @@ def comparar_com_pk_sample(
                 row_expr  = "(" + ", ".join(f'"{c}"' for c in pk_cols) + ")"
                 row_ph    = "(" + ", ".join(["%s"] * pk_len) + ")"
                 in_clause = ", ".join([row_ph] * len(valid_pk_tuples))
-                flat_vals = [v for pk in valid_pk_tuples for v in pk]
+                flat_vals = [v for pk in (_pk_tuple(t, pk_len) for t in valid_pk_tuples) for v in pk]
                 cur_pg.execute(
                     f'SELECT {pk_pg}, {blob_pg} FROM {schema}."{pg_table}"'
                     f' WHERE {row_expr} IN ({in_clause})',
