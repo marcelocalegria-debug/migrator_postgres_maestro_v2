@@ -74,6 +74,9 @@ python compara_estrutura_fb2pg.py --work-dir MIGRACAO_XXXX
 
 ## Development Conventions
 
+### 0. Shell Standard
+O desenvolvimento e a execução de comandos via CLI devem ser realizados **exclusivamente via PowerShell**. Evite o uso de comandos Linux (como `grep`, `cat`, `ls`) para garantir a compatibilidade com o ambiente Windows. Utilize comandos equivalentes como `Select-String`, `Get-Content`, `Get-ChildItem`.
+
 ### 1. Adding New Steps
 - Crie uma classe em `lib/steps/sXX_name.py` que herde de `StepBase`.
 - Implemente o método `run()`.

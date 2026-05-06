@@ -388,7 +388,7 @@ def comparar_com_pk_sample(
     pk_cols: list[str], blob_cols: list[str],
     n_sample: int,
     schema: str = "public",
-) -> tuple[int, dict, list[dict], int]:
+) -> tuple[int, dict, list[dict], list[tuple], int]:
     """
     Compara BLOB vs BYTEA por amostragem: primeiras N linhas do Firebird, buscadas
     por PK no PostgreSQL.
@@ -396,7 +396,7 @@ def comparar_com_pk_sample(
     Usa os PKs do Firebird para consultar o PostgreSQL (WHERE pk IN ...), evitando
     falsos positivos por diferença de collation/ordenação entre os dois bancos.
 
-    Retorna: (total_amostrado, stats_por_coluna, lista_de_divergências, total_real)
+    Retorna: (total_amostrado, stats_por_coluna, lista_de_divergências, pks_só_fb, total_real)
     """
     cur_pg = conn_pg.cursor()
     cur_fb = conn_fb.cursor()
@@ -407,16 +407,19 @@ def comparar_com_pk_sample(
     blob_fb = ", ".join(c.upper() for c in blob_cols)
     pk_len  = len(pk_cols)
 
-    # Descobre total de linhas no PostgreSQL
+    # Descobre total de linhas no PostgreSQL e Firebird
     cur_pg.execute(f'SELECT COUNT(*) FROM {schema}."{pg_table}"')
-    total_real = cur_pg.fetchone()[0]
+    total_pg = cur_pg.fetchone()[0]
 
-    if total_real == 0:
+    cur_fb.execute(f'SELECT COUNT(*) FROM {fb_table}')
+    total_fb = cur_fb.fetchone()[0]
+
+    if total_fb == 0:
         stats = {col: {"ok": 0, "diff": 0, "only_fb": 0, "only_pg": 0, "both_null": 0}
                  for col in blob_cols}
-        return 0, stats, [], 0
+        return 0, stats, [], [], total_pg
 
-    n = min(n_sample, total_real)
+    n = min(n_sample, total_fb)
 
     # Fase 1: busca primeiras N linhas do Firebird (evita SKIP caro no FB)
     cur_fb.execute(f'SELECT FIRST {n} {pk_fb}, {blob_fb} FROM {fb_table} ORDER BY {pk_fb}')
@@ -475,9 +478,34 @@ def comparar_com_pk_sample(
     stats  = {col: {"ok": 0, "diff": 0, "only_fb": 0, "only_pg": 0, "both_null": 0}
               for col in blob_cols}
     errors: list[dict] = []
+    only_fb_pks: list[tuple] = []
 
     for pk_val, fb_row in fb_sample.items():
         pg_row = pg_sample.get(pk_val)
+
+        # --- ZERO RISK FALLBACK ---
+        # Se a busca em lote falhou por questões de padding/tipo, tenta uma busca direta com TRIM
+        if pg_row is None:
+            try:
+                cur_pg.execute("SAVEPOINT fallback_sp")
+                where_clauses = [f'TRIM("{c}") = %s' for c in pk_cols]
+                where_sql = " AND ".join(where_clauses)
+                cur_pg.execute(
+                    f'SELECT {blob_pg} FROM {schema}."{pg_table}" WHERE {where_sql}',
+                    pk_val
+                )
+                fallback_row = cur_pg.fetchone()
+                if fallback_row:
+                    pg_row = {col: md5_of(fallback_row[i]) for i, col in enumerate(blob_cols)}
+                    pg_sample[pk_val] = pg_row
+                cur_pg.execute("RELEASE SAVEPOINT fallback_sp")
+            except Exception:
+                cur_pg.execute("ROLLBACK TO SAVEPOINT fallback_sp")
+        # --------------------------
+
+        if pg_row is None and len(only_fb_pks) < 20:
+            only_fb_pks.append(pk_val)
+
         for i, col in enumerate(blob_cols):
             hash_fb = fb_row[col]
             hash_pg = pg_row[col] if pg_row is not None else None
@@ -494,7 +522,7 @@ def comparar_com_pk_sample(
                                    "hash_fb": hash_fb, "hash_pg": hash_pg})
 
     total_amostrado = len(fb_sample)
-    return total_amostrado, stats, errors, total_real
+    return total_amostrado, stats, errors, only_fb_pks, total_pg
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -567,11 +595,12 @@ def _run_one_table(cfg: dict, fb_table: str, pg_table: str, schema: str,
 
             if pk_cols:
                 if n_sample > 0:
-                    total, stats, errors, total_real = comparar_com_pk_sample(
+                    total, stats, errors, only_fb_pks, total_real = comparar_com_pk_sample(
                         conn_fb, conn_pg, fb_table, pg_table,
                         pk_cols, shared_cols, n_sample, schema,
                     )
                     result["total_real"] = total_real
+                    result["only_fb_pks"] = only_fb_pks
                 else:
                     total, stats, errors, only_fb_pks = comparar_com_pk(
                         conn_fb, conn_pg, fb_table, pg_table,

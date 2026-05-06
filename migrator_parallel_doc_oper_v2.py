@@ -713,7 +713,17 @@ Observabilidade:
                     help='Usa INSERT em vez de COPY')
     ap.add_argument('--generate-scripts-only', action='store_true',
                     help='Apenas gera scripts SQL de constraints')
-    args = ap.parse_args()
+    
+    # [PROTEÇÃO] Se receber argumentos estranhos (como do validador de checksum), avisa erro específico
+    # (Isso ajuda a identificar se o script foi sobrescrito por engano no servidor)
+    known, unknown = ap.parse_known_args()
+    if unknown:
+        print(f"\n[ERRO] Argumentos desconhecidos detectados: {unknown}")
+        print(f"Isso pode indicar que o script {sys.argv[0]} foi corrompido ou substituído por outro.")
+        print(f"Uso esperado: {ap.format_usage()}")
+        sys.exit(1)
+        
+    args = known
 
     # Define config padrão baseado no work-dir se não for informado
     config_file = args.config if args.config else os.path.join(args.work_dir, 'config.yaml')
