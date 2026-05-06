@@ -359,7 +359,6 @@ class MigrationDB:
                 (migration_id, table_name.strip(), table_name.strip())
             )
         return category
-        return category
 
     # ── batches ───────────────────────────────────────────────────────────────
 
