@@ -36,6 +36,16 @@ python maestro.py --resume 0005 # resume explícito da migração 0005
 
 ## 2. Migradores Standalone
 
+ATENCAO -  Por que a execução via script ad-hoc não contabilizou no Maestro?
+  Quando você executa o script migrator_parallel_doc_oper_v2.py diretamente via CLI (por fora do Maestro), ele isola o   seu estado e cria pequenos bancos SQLite paralelos (ex: migration_state_documento_operacao_t0.db) para controle de   suas próprias threads.
+
+  Ele não atualiza o banco central (migration.db) do Maestro automaticamente a menos que você passe os parâmetros   --master-db MIGRACAO_XXXX/migration.db e --migration-id 1 no comando avulso. Sem essas flags, o Maestro continuará  "achando" que a tabela não foi processada. Ele não atualiza o banco central (migration.db) do Maestro automaticamente a menos que você passe os parâmetros --master-db MIGRACAO_XXXX/migration.db e --migration-id 1 no comando avulso. Sem essas flags, o Maestro continuará  "achando" que a tabela não foi processada.
+
+EXEMPLO:
+
+python migrator_parallel_doc_oper_v2.py --work-dir MIGRACAO_0001 --threads 4 --master-db MIGRACAO_XXXX/migration.db e --migration-id 1
+
+
 ### migrator_v2.py — Tabela individual
 
 ```bash

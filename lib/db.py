@@ -275,8 +275,8 @@ class MigrationDB:
     def get_table_by_name(self, migration_id: int, source_table: str) -> Optional[dict]:
         conn = self._read_conn()
         row = conn.execute(
-            "SELECT * FROM tables WHERE migration_id=? AND source_table=?",
-            (migration_id, source_table)
+            "SELECT * FROM tables WHERE migration_id=? AND LOWER(source_table)=LOWER(?)",
+            (migration_id, source_table.strip())
         ).fetchone()
         conn.close()
         return dict(row) if row else None
@@ -319,8 +319,8 @@ class MigrationDB:
         """Reseta status de uma única tabela e retorna sua categoria."""
         conn = self._read_conn()
         row = conn.execute(
-            "SELECT category FROM tables WHERE migration_id=? AND (source_table=? OR dest_table=?)",
-            (migration_id, table_name.upper(), table_name.lower())
+            "SELECT category FROM tables WHERE migration_id=? AND (LOWER(source_table)=LOWER(?) OR LOWER(dest_table)=LOWER(?))",
+            (migration_id, table_name.strip(), table_name.strip())
         ).fetchone()
         conn.close()
 
@@ -333,8 +333,8 @@ class MigrationDB:
                 """UPDATE tables SET 
                    status='pending', rows_migrated=0, rows_failed=0, current_batch=0, 
                    started_at=NULL, completed_at=NULL, error_message=NULL
-                   WHERE migration_id=? AND (source_table=? OR dest_table=?)""",
-                (migration_id, table_name.upper(), table_name.lower())
+                   WHERE migration_id=? AND (LOWER(source_table)=LOWER(?) OR LOWER(dest_table)=LOWER(?))""",
+                (migration_id, table_name.strip(), table_name.strip())
             )
         return category
 
@@ -342,8 +342,8 @@ class MigrationDB:
         """Marca uma tabela como concluída manualmente (ignora erro)."""
         conn = self._read_conn()
         row = conn.execute(
-            "SELECT category FROM tables WHERE migration_id=? AND (source_table=? OR dest_table=?)",
-            (migration_id, table_name.upper(), table_name.lower())
+            "SELECT category, source_table, dest_table FROM tables WHERE migration_id=? AND (LOWER(source_table)=LOWER(?) OR LOWER(dest_table)=LOWER(?))",
+            (migration_id, table_name.strip(), table_name.strip())
         ).fetchone()
         conn.close()
 
@@ -353,12 +353,12 @@ class MigrationDB:
         category = row['category']
         with self._conn() as conn:
             conn.execute(
-                """UPDATE tables SET 
-                   status='completed', 
-                   error_message='MANUAL_IGNORE: Ignorada pelo DBA'
-                   WHERE migration_id=? AND (source_table=? OR dest_table=?)""",
-                (migration_id, table_name.upper(), table_name.lower())
+                """UPDATE tables SET
+                   status='completed', error_message='Forçado via CLI (/ignore)'
+                   WHERE migration_id=? AND (LOWER(source_table)=LOWER(?) OR LOWER(dest_table)=LOWER(?))""",
+                (migration_id, table_name.strip(), table_name.strip())
             )
+        return category
         return category
 
     # ── batches ───────────────────────────────────────────────────────────────

@@ -238,6 +238,13 @@ python migrator_parallel_doc_oper_v2.py --work-dir MIGRACAO_0001 --threads 4
 python migrator_parallel_doc_oper_v2.py --work-dir MIGRACAO_0001 --threads 4 --reset
 python migrator_parallel_doc_oper_v2.py --work-dir MIGRACAO_0001 --threads 4 --dry-run
 
+ATENCAO - Ele não atualiza o banco central (migration.db) do Maestro automaticamente a menos que você passe os parâmetros --master-db MIGRACAO_XXXX/migration.db e --migration-id 1 no comando avulso. Sem essas flags, o Maestro continuará  "achando" que a tabela não foi processada.
+
+EXEMPLO:
+
+python migrator_parallel_doc_oper_v2.py --work-dir MIGRACAO_0001 --threads 4 --master-db MIGRACAO_XXXX/migration.db e --migration-id 1
+
+
 # LOG_EVENTOS (paralelo por RDB$DB_KEY, sem PK)
 python migrator_log_eventos_v2.py --work-dir MIGRACAO_0001 --threads 8
 python migrator_log_eventos_v2.py --work-dir MIGRACAO_0001 --threads 8 --dry-run
