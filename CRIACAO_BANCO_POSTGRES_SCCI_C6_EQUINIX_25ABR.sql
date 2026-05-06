@@ -69,6 +69,10 @@ GRANT ALL PRIVILEGES ON DATABASE c6_producao TO "c6_producao_user";
 ALTER DATABASE c6_producao SET search_path TO "$user", public, pg_catalog;
 
 
+--------------------------------------------------------------------------------------------
+-- ATENÇÃO !!  TROCAR O DATABASE ATUAL PELO CRIADO, ANTES DE EXECUTAR OS COMANDOS ABAIXO ---
+--------------------------------------------------------------------------------------------
+
 \c c6_producao
 
 -- Cria, se já existir ignora o erro pois coloquei isso no TEMPLATE
@@ -77,10 +81,6 @@ CREATE EXTENSION pg_stat_statements;
 ----------------------------------------
 -- 3 Criar o esquema(mesmo nome banco) conectado como user postgres no banco 
 ----------------------------------------
---------------------------------------------------------------------------------------------
--- ATENÇÃO !!  TROCAR O DATABASE ATUAL PELO CRIADO, ANTES DE EXECUTAR OS COMANDOS ABAIXO ---
---------------------------------------------------------------------------------------------
-\c c6_producao
 
 -- Permissões 
 ALTER DEFAULT PRIVILEGES FOR ROLE "c6_producao_user" IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES     TO "c6_producao_user"; 

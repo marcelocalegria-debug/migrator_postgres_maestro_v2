@@ -56,7 +56,8 @@ class MigrateBigStep(StepBase):
                 '--config', str(config_path.absolute()),
                 '--master-db', str(master_db.absolute()),
                 '--migration-id', str(self.migration_id),
-                '--work-dir', str(mig_dir.absolute())
+                '--work-dir', str(mig_dir.absolute()),
+                '--threads', '4'  # <--- Especializados podem usar mais threads
             ]
             log_f = open(mig_dir / "logs" / f"migrate_{table.lower()}.stdout.log", "w", encoding='utf-8')
             p = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT, env=env)

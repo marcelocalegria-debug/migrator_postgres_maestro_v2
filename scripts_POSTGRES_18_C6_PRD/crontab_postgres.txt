@@ -1,0 +1,15 @@
+MAILTO="m.alegria@prognum.com.br"
+#####################################################################
+# NOVO PADRAO CRONTAB postgres - MARCELO ALEGRIA - 08/out/2025
+#####################################################################
+
+10 22 * * * /backup/scripts/Backup_complementar_postgres.sh
+
+# 16
+30 19 * * * /backup/scripts/backup_logico.sh
+#30 23 * * * /backup/scripts/backup_fisico_OFFLINE.sh
+00 22 * * * /backup/scripts/backup_fisico_online_PITR.sh
+00 23 * * * /backup/scripts/backup_fisico_online_BASE.sh
+00 01 * * * /backup/scripts/reindex.sh
+00 03 * * * /backup/scripts/vacuum.sh
+
