@@ -82,14 +82,41 @@ CREATE EXTENSION pg_stat_statements;
 postgres=# \c <nome_banco>
 
 -- Permissões 
-ALTER DEFAULT PRIVILEGES FOR ROLE "<nome_banco>_user" IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES     TO "<nome_banco>_user"; 
-ALTER DEFAULT PRIVILEGES FOR ROLE "<nome_banco>_user" IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES  TO "<nome_banco>_user";
-ALTER DEFAULT PRIVILEGES FOR ROLE "<nome_banco>_user" IN SCHEMA public GRANT ALL PRIVILEGES ON FUNCTIONS  TO "<nome_banco>_user";
-ALTER DEFAULT PRIVILEGES FOR ROLE "<nome_banco>_user" IN SCHEMA public GRANT ALL PRIVILEGES ON TYPES      TO "<nome_banco>_user";
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "<nome_banco>_user";
+
+-- ====================================================================================
+-- ATENÇÃO: Conecte-se no novo banco de dados antes de rodar este script.
+-- Se o banco for deletado e recriado, este bloco DEVE ser executado novamente nele.
+-- ====================================================================================
+
+-- Conecta no banco de dados alvo
+\c <nome_banco>
+
+-- 1. CONTROLE NO BANCO DE DADOS
+-- Garante que o usuário consiga conectar e criar coisas novas a nível de banco
+GRANT CONNECT, CREATE, TEMPORARY ON DATABASE <nome_banco> TO "<nome_banco>_user";
+
+-- 2. CONTROLE NO SCHEMA PUBLIC
+-- Torna o usuário DONO do schema public (ele passa a mandar em tudo aqui dentro)
+ALTER SCHEMA public OWNER TO "<nome_banco>_user";
 GRANT ALL PRIVILEGES ON SCHEMA public TO "<nome_banco>_user";
 
-ALTER TABLESPACE tbs_<nome_banco>   OWNER TO "<nome_banco>_user";
+-- 3. GARANTIA PARA OBJETOS QUE JÁ EXISTEM (Caso o banco não esteja totalmente vazio)
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "<nome_banco>_user";
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "<nome_banco>_user";
+GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO "<nome_banco>_user";
+GRANT ALL PRIVILEGES ON ALL PROCEDURES IN SCHEMA public TO "<nome_banco>_user";
+GRANT ALL PRIVILEGES ON ALL ROUTINES IN SCHEMA public TO "<nome_banco>_user";
+
+-- 4. O SEGREDO PARA OS NOVOS OBJETOS (PRIVILÉGIOS PADRÕES)
+-- Se o usuário 'postgres' (ou ferramentas de migration) criarem tabelas no futuro,
+-- o Postgres concederá automaticamente controle total para o usuário da aplicação.
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO "<nome_banco>_user";
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO "<nome_banco>_user";
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL PRIVILEGES ON FUNCTIONS TO "<nome_banco>_user";
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL PRIVILEGES ON TYPES TO "<nome_banco>_user";
+
+-- 5. AJUSTE DE TABLESPACE (Objeto global da instância)
+ALTER TABLESPACE tbs_<nome_banco> OWNER TO "<nome_banco>_user";
 
 -- conecta no banco postgres agora 
 
